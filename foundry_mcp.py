@@ -28,6 +28,19 @@ def _client():
         c.disconnect()
 
 
+# ── Actor ──────────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def actor_list() -> list:
+    """List all actors in the active Foundry world.
+
+    Each actor includes _id, name, and type. Use Actor.<_id> as the UUID
+    when linking to an actor sheet from journal content.
+    """
+    with _client() as c:
+        return c.get_actors()
+
+
 # ── Journal ────────────────────────────────────────────────────────────────────
 
 @mcp.tool()

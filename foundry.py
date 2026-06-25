@@ -169,6 +169,11 @@ class FoundryClient:
         })
         return r["result"][0]["_id"]
 
+    # ── Actor ─────────────────────────────────────────────────────────────────
+
+    def get_actors(self) -> list:
+        return self._get("Actor")
+
     # ── Journal ───────────────────────────────────────────────────────────────
 
     def get_journals(self) -> list:
@@ -385,6 +390,8 @@ def _make_client() -> FoundryClient:
 
 
 _COMMAND_TREE = """\
+  actor list  [--json]
+
   journal list    [--json]
   journal upsert  --title NAME  [--folder FOLDER]  [--public]
   journal delete  --title NAME
@@ -414,6 +421,32 @@ class _VerbatimEpilog(click.Group):
 @click.group(cls=_VerbatimEpilog, epilog=_COMMAND_TREE)
 def cli():
     """Foundry VTT CLI — manage world content via Socket.io."""
+
+
+@cli.group()
+def actor():
+    """Manage actors."""
+
+
+@actor.command("list")
+@click.option("--json", "as_json", is_flag=True)
+def actor_list(as_json: bool):
+    """List all actors."""
+    client = _make_client()
+    try:
+        actors = client.get_actors()
+        if as_json:
+            click.echo(json.dumps(actors, indent=2))
+        else:
+            if not actors:
+                click.echo("No actors.")
+                return
+            click.echo(f"{'NAME':<40}  {'TYPE':<10}  ID")
+            click.echo("-" * 72)
+            for a in sorted(actors, key=lambda x: x["name"]):
+                click.echo(f"{a['name']:<40}  {a.get('type', ''):<10}  {a['_id']}")
+    finally:
+        client.disconnect()
 
 
 @cli.group()
