@@ -8,4 +8,11 @@ dependencies = [
     "websocket-client>=1.0",
     "requests>=2.0",
     "python-dotenv>=1.0",
+    "mcp>=1.0",
 ]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

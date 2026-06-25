@@ -1,3 +1,5 @@
+name: foundry-cli
+
 secrets:
   foundry_config_json:
     file: secrets.json
@@ -11,6 +13,6 @@ services:
       - source: foundry_config_json
         target: config.json
     ports:
-      - 30000:30000
+      - 30001:30000
     volumes:
       - ./data:/data/

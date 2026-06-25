@@ -1,17 +1,10 @@
 #!/usr/bin/env python3
-"""
-foundry -- CLI for Foundry VTT
+"""foundry -- CLI for Foundry VTT
 
 Manages journal entries in a running Foundry world via Socket.io.
-
-Credentials are loaded from tools/foundry/.env (or env vars):
+Credentials are loaded from .env (or env vars):
   FOUNDRY_URL, FOUNDRY_BASIC_USER, FOUNDRY_BASIC_PASS,
   FOUNDRY_WORLD, FOUNDRY_GM_USER, FOUNDRY_GM_PASSWORD
-
-Usage:
-  uv run python foundry.py journal list [--json]
-  uv run python foundry.py journal upsert --title NAME --folder FOLDER [--public] [--content HTML | --content-file PATH]
-  uv run python foundry.py journal delete --title NAME
 """
 
 import base64
@@ -29,25 +22,31 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).parent / ".env")
 
 
-# ── Config ────────────────────────────────────────────────────────────────────
+# ── Config ─────────────────────────────────────────────────────────────────────
 
 def _load_config() -> dict:
     cfg = {
-        "url":          os.getenv("FOUNDRY_URL", ""),
-        "basic_user":   os.getenv("FOUNDRY_BASIC_USER", ""),
-        "basic_pass":   os.getenv("FOUNDRY_BASIC_PASS", ""),
-        "world":        os.getenv("FOUNDRY_WORLD", ""),
-        "gm_user":      os.getenv("FOUNDRY_GM_USER", ""),
-        "gm_password":  os.getenv("FOUNDRY_GM_PASSWORD", ""),
+        "url":         os.getenv("FOUNDRY_URL", ""),
+        "basic_user":  os.getenv("FOUNDRY_BASIC_USER", ""),
+        "basic_pass":  os.getenv("FOUNDRY_BASIC_PASS", ""),
+        "world":       os.getenv("FOUNDRY_WORLD", ""),
+        "gm_user":     os.getenv("FOUNDRY_GM_USER", ""),
+        "gm_password": os.getenv("FOUNDRY_GM_PASSWORD", ""),
     }
-    required = ["url", "world", "gm_user"]
-    missing = [k for k in required if not cfg[k]]
+    missing = [k for k in ("url", "world", "gm_user") if not cfg[k]]
     if missing:
-        raise click.ClickException(f"Missing config: {', '.join(missing)}. Check tools/foundry/.env")
+        raise click.ClickException(f"Missing config: {', '.join(missing)}. Check .env")
     return cfg
 
 
-# ── Foundry client ────────────────────────────────────────────────────────────
+# ── Foundry ownership constants ────────────────────────────────────────────────
+
+_INHERIT  = -1
+_NONE     = 0
+_OBSERVER = 2
+
+
+# ── Foundry client ─────────────────────────────────────────────────────────────
 
 class FoundryClient:
     def __init__(self, cfg: dict):
@@ -87,7 +86,6 @@ class FoundryClient:
                 f"Expected world '{self._world}' but '{active}' is active")
 
     def _discover_user_id(self) -> str:
-        """Connect unauthenticated, call getJoinData to resolve user name → internal ID."""
         result: list = [None]
         done = threading.Event()
         sio = socketio.Client(logger=False, engineio_logger=False)
@@ -113,18 +111,16 @@ class FoundryClient:
                 return u["_id"]
 
         names = [u.get("name") for u in users]
-        raise click.ClickException(
-            f"User '{self._gm_user}' not found. Available: {names}")
+        raise click.ClickException(f"User '{self._gm_user}' not found. Available: {names}")
 
     def connect(self):
         self._check_world()
-        self._http.get(f"{self._url}/join")  # create session cookie
+        self._http.get(f"{self._url}/join")
         user_id = self._discover_user_id()
         r = self._http.post(f"{self._url}/join",
                             json={"action": "join", "userid": user_id,
                                   "password": self._gm_password})
         r.raise_for_status()
-
         self._sio.connect(self._url, headers=self._socket_headers(), transports=["websocket"])
         if not self._ready.wait(timeout=10):
             raise click.ClickException("Socket.io connection timed out")
@@ -148,8 +144,6 @@ class FoundryClient:
             raise click.ClickException(r["error"].get("message", str(r["error"])))
         return r
 
-    # ── Document helpers ──────────────────────────────────────────────────────
-
     def _get(self, doc_type: str, query: dict | None = None) -> list:
         r = self._emit({
             "type": doc_type,
@@ -158,12 +152,14 @@ class FoundryClient:
         })
         return r.get("result", [])
 
-    def get_journals(self) -> list:
-        return self._get("JournalEntry")
+    def _find_journal(self, name: str) -> dict:
+        for j in self._get("JournalEntry"):
+            if j["name"] == name:
+                return j
+        raise click.ClickException(f"Journal '{name}' not found")
 
     def _find_or_create_folder(self, name: str) -> str:
-        folders = self._get("Folder", {"type": "JournalEntry"})
-        for f in folders:
+        for f in self._get("Folder", {"type": "JournalEntry"}):
             if f["name"].lower() == name.lower():
                 return f["_id"]
         r = self._emit({
@@ -173,41 +169,18 @@ class FoundryClient:
         })
         return r["result"][0]["_id"]
 
-    # ── Public operations ─────────────────────────────────────────────────────
+    # ── Journal ───────────────────────────────────────────────────────────────
 
-    def journal_upsert(self, title: str, content: str, folder: str | None, public: bool) -> dict:
+    def get_journals(self) -> list:
+        return self._get("JournalEntry")
+
+    def journal_upsert(self, title: str, folder: str | None, public: bool) -> dict:
         folder_id = self._find_or_create_folder(folder) if folder else None
-        ownership = {"default": 2 if public else 0}  # 2=OBSERVER, 0=NONE
-
+        ownership = {"default": _OBSERVER if public else _NONE}
         existing = [j for j in self.get_journals() if j["name"] == title]
 
         if existing:
-            j = existing[0]
-            pages = j.get("pages", [])
-            text_pages = [p for p in pages if p.get("type") == "text"]
-            parent_uuid = f"JournalEntry.{j['_id']}"
-
-            if text_pages:
-                self._emit({
-                    "type": "JournalEntryPage",
-                    "action": "update",
-                    "operation": {
-                        "updates": [{"_id": text_pages[0]["_id"], "text.content": content}],
-                        "parentUuid": parent_uuid,
-                    },
-                })
-            else:
-                self._emit({
-                    "type": "JournalEntryPage",
-                    "action": "create",
-                    "operation": {
-                        "data": [{"name": "Main", "type": "text",
-                                  "text": {"content": content, "format": 1}}],
-                        "parentUuid": parent_uuid,
-                    },
-                })
-
-            update = {"_id": j["_id"], "ownership": ownership}
+            update: dict = {"_id": existing[0]["_id"], "ownership": ownership}
             if folder_id is not None:
                 update["folder"] = folder_id
             r = self._emit({
@@ -217,24 +190,15 @@ class FoundryClient:
             })
             return r["result"][0]
 
-        else:
-            r = self._emit({
-                "type": "JournalEntry",
-                "action": "create",
-                "operation": {
-                    "data": [{
-                        "name": title,
-                        "folder": folder_id,
-                        "ownership": ownership,
-                        "pages": [{
-                            "name": "Main",
-                            "type": "text",
-                            "text": {"content": content, "format": 1},
-                        }],
-                    }]
-                },
-            })
-            return r["result"][0]
+        data: dict = {"name": title, "ownership": ownership}
+        if folder_id is not None:
+            data["folder"] = folder_id
+        r = self._emit({
+            "type": "JournalEntry",
+            "action": "create",
+            "operation": {"data": [data]},
+        })
+        return r["result"][0]
 
     def journal_delete(self, title: str) -> bool:
         matches = [j for j in self.get_journals() if j["name"] == title]
@@ -247,32 +211,164 @@ class FoundryClient:
         })
         return True
 
+    # ── Category ──────────────────────────────────────────────────────────────
 
-# ── CLI ───────────────────────────────────────────────────────────────────────
+    def category_list(self, journal_name: str) -> list:
+        return self._find_journal(journal_name).get("categories", [])
 
-@click.group()
+    def category_upsert(self, journal_name: str, name: str) -> dict:
+        j = self._find_journal(journal_name)
+        for cat in j.get("categories", []):
+            if cat["name"] == name:
+                return cat
+        r = self._emit({
+            "type": "JournalEntryCategory",
+            "action": "create",
+            "operation": {
+                "data": [{"name": name}],
+                "parentUuid": f"JournalEntry.{j['_id']}",
+            },
+        })
+        return r["result"][0]
+
+    def category_delete(self, journal_name: str, name: str) -> bool:
+        j = self._find_journal(journal_name)
+        matches = [c for c in j.get("categories", []) if c["name"] == name]
+        if not matches:
+            return False
+        self._emit({
+            "type": "JournalEntryCategory",
+            "action": "delete",
+            "operation": {
+                "ids": [c["_id"] for c in matches],
+                "parentUuid": f"JournalEntry.{j['_id']}",
+            },
+        })
+        return True
+
+    # ── Page ──────────────────────────────────────────────────────────────────
+
+    def page_list(self, journal_name: str) -> list:
+        j = self._find_journal(journal_name)
+        cat_map = {c["_id"]: c["name"] for c in j.get("categories", [])}
+        pages = j.get("pages", [])
+        for p in pages:
+            p["_category_name"] = cat_map.get(p.get("category"), "")
+        return pages
+
+    def page_upsert(self, journal_name: str, title: str, category_name: str | None,
+                    level: int, public: bool, content: str) -> dict:
+        j = self._find_journal(journal_name)
+        parent_uuid = f"JournalEntry.{j['_id']}"
+
+        category_id = None
+        if category_name:
+            matched = [c for c in j.get("categories", []) if c["name"] == category_name]
+            if not matched:
+                cmd = (f'foundry journal category upsert'
+                       f' --journal "{journal_name}" --name "{category_name}"')
+                raise click.ClickException(
+                    f"Category '{category_name}' not found. Create it first:\n  {cmd}")
+            category_id = matched[0]["_id"]
+
+        page_data: dict = {
+            "name": title,
+            "type": "text",
+            "title": {"show": True, "level": level},
+            "text": {"content": content, "format": 1},
+            "ownership": {"default": _OBSERVER if public else _INHERIT},
+        }
+        if category_id is not None:
+            page_data["category"] = category_id
+
+        existing = [p for p in j.get("pages", []) if p["name"] == title]
+        if existing:
+            r = self._emit({
+                "type": "JournalEntryPage",
+                "action": "update",
+                "operation": {
+                    "updates": [{"_id": existing[0]["_id"], **page_data}],
+                    "parentUuid": parent_uuid,
+                },
+            })
+        else:
+            r = self._emit({
+                "type": "JournalEntryPage",
+                "action": "create",
+                "operation": {
+                    "data": [page_data],
+                    "parentUuid": parent_uuid,
+                },
+            })
+        return r["result"][0]
+
+    def page_delete(self, journal_name: str, title: str) -> bool:
+        j = self._find_journal(journal_name)
+        matches = [p for p in j.get("pages", []) if p["name"] == title]
+        if not matches:
+            return False
+        self._emit({
+            "type": "JournalEntryPage",
+            "action": "delete",
+            "operation": {
+                "ids": [p["_id"] for p in matches],
+                "parentUuid": f"JournalEntry.{j['_id']}",
+            },
+        })
+        return True
+
+
+# ── CLI ─────────────────────────────────────────────────────────────────────────
+
+def _make_client() -> FoundryClient:
+    client = FoundryClient(_load_config())
+    client.connect()
+    return client
+
+
+_COMMAND_TREE = """\
+  journal list    [--json]
+  journal upsert  --title NAME  [--folder FOLDER]  [--public]
+  journal delete  --title NAME
+
+  journal category list    --journal NAME  [--json]
+  journal category upsert  --journal NAME  --name NAME
+  journal category delete  --journal NAME  --name NAME
+
+  journal page list    --journal NAME  [--json]
+  journal page upsert  --journal NAME  --title NAME
+                       [--category NAME]  [--level 1-6]  [--public]
+                       [--content HTML | --content-file PATH | stdin]
+  journal page delete  --journal NAME  --title NAME
+"""
+
+
+class _VerbatimEpilog(click.Group):
+    def format_epilog(self, ctx, formatter):
+        if self.epilog:
+            formatter.write_paragraph()
+            formatter.write("Commands:\n")
+            formatter.write(self.epilog)
+
+
+@click.group(cls=_VerbatimEpilog, epilog=_COMMAND_TREE)
 def cli():
-    """Foundry VTT CLI — manage world content via Socket.io.
-
-    Reads credentials from tools/foundry/.env. Override with env vars:
-    FOUNDRY_URL, FOUNDRY_BASIC_USER, FOUNDRY_BASIC_PASS,
-    FOUNDRY_WORLD, FOUNDRY_GM_USER, FOUNDRY_GM_PASSWORD.
-    """
+    """Foundry VTT CLI — manage world content via Socket.io."""
 
 
 @cli.group()
 def journal():
-    """Create, update, list, and delete journal entries."""
+    """Manage journal entries."""
 
+
+# ── journal list / upsert / delete ────────────────────────────────────────────
 
 @journal.command("list")
-@click.option("--json", "as_json", is_flag=True, help="Output raw JSON")
+@click.option("--json", "as_json", is_flag=True)
 def journal_list(as_json: bool):
-    """List all journal entries in the active world."""
-    cfg = _load_config()
-    client = FoundryClient(cfg)
+    """List all journal entries."""
+    client = _make_client()
     try:
-        client.connect()
         entries = client.get_journals()
         if as_json:
             click.echo(json.dumps(entries, indent=2))
@@ -281,29 +377,150 @@ def journal_list(as_json: bool):
                 click.echo("No journal entries.")
                 return
             for e in sorted(entries, key=lambda x: x["name"]):
-                folder = e.get("folder") or "(none)"
-                click.echo(f"{e['name']:<40}  {e['_id']}  folder={folder}")
+                click.echo(f"{e['name']:<40}  {e['_id']}")
     finally:
         client.disconnect()
 
 
 @journal.command("upsert")
 @click.option("--title", required=True, help="Journal entry name")
+@click.option("--folder", default=None, help="Folder (created if absent)")
+@click.option("--public", is_flag=True, help="Set OBSERVER ownership")
+def journal_upsert_cmd(title: str, folder: str | None, public: bool):
+    """Create or update a journal entry."""
+    client = _make_client()
+    try:
+        result = client.journal_upsert(title, folder=folder, public=public)
+        click.echo(f"OK  {result['name']}  ({result['_id']})")
+    finally:
+        client.disconnect()
+
+
+@journal.command("delete")
+@click.option("--title", required=True, help="Exact journal entry name")
+@click.confirmation_option(prompt="Delete this journal entry?")
+def journal_delete_cmd(title: str):
+    """Delete a journal entry."""
+    client = _make_client()
+    try:
+        if client.journal_delete(title):
+            click.echo(f"Deleted: {title}")
+        else:
+            click.echo(f"Not found: {title}", err=True)
+            sys.exit(1)
+    finally:
+        client.disconnect()
+
+
+# ── journal category ──────────────────────────────────────────────────────────
+
+@journal.group()
+def category():
+    """Manage journal categories."""
+
+
+@category.command("list")
+@click.option("--journal", "journal_name", required=True)
+@click.option("--json", "as_json", is_flag=True)
+def category_list(journal_name: str, as_json: bool):
+    """List categories in a journal."""
+    client = _make_client()
+    try:
+        cats = client.category_list(journal_name)
+        if as_json:
+            click.echo(json.dumps(cats, indent=2))
+        else:
+            if not cats:
+                click.echo("No categories.")
+                return
+            for c in cats:
+                click.echo(f"{c['name']:<40}  {c['_id']}")
+    finally:
+        client.disconnect()
+
+
+@category.command("upsert")
+@click.option("--journal", "journal_name", required=True)
+@click.option("--name", required=True, help="Category name")
+def category_upsert_cmd(journal_name: str, name: str):
+    """Create a category (idempotent)."""
+    client = _make_client()
+    try:
+        result = client.category_upsert(journal_name, name)
+        click.echo(f"OK  {result['name']}  ({result['_id']})")
+    finally:
+        client.disconnect()
+
+
+@category.command("delete")
+@click.option("--journal", "journal_name", required=True)
+@click.option("--name", required=True, help="Category name")
+@click.confirmation_option(prompt="Delete this category?")
+def category_delete_cmd(journal_name: str, name: str):
+    """Delete a category."""
+    client = _make_client()
+    try:
+        if client.category_delete(journal_name, name):
+            click.echo(f"Deleted: {name}")
+        else:
+            click.echo(f"Not found: {name}", err=True)
+            sys.exit(1)
+    finally:
+        client.disconnect()
+
+
+# ── journal page ──────────────────────────────────────────────────────────────
+
+@journal.group()
+def page():
+    """Manage journal pages."""
+
+
+@page.command("list")
+@click.option("--journal", "journal_name", required=True)
+@click.option("--json", "as_json", is_flag=True)
+def page_list(journal_name: str, as_json: bool):
+    """List pages in a journal."""
+    client = _make_client()
+    try:
+        pages = client.page_list(journal_name)
+        if as_json:
+            click.echo(json.dumps(pages, indent=2))
+        else:
+            if not pages:
+                click.echo("No pages.")
+                return
+            click.echo(f"{'TITLE':<40}  {'CATEGORY':<20}  {'LEVEL':>5}  TYPE")
+            click.echo("-" * 76)
+            for p in pages:
+                click.echo(
+                    f"{p.get('name', ''):<40}"
+                    f"  {p.get('_category_name', ''):<20}"
+                    f"  {p.get('title', {}).get('level', ''):>5}"
+                    f"  {p.get('type', '')}"
+                )
+    finally:
+        client.disconnect()
+
+
+@page.command("upsert")
+@click.option("--journal", "journal_name", required=True)
+@click.option("--title", required=True, help="Page name")
+@click.option("--category", "category_name", default=None, help="Category name")
+@click.option("--level", default=1, type=click.IntRange(1, 6), show_default=True,
+              help="Sidebar indentation level (1=top)")
+@click.option("--public", is_flag=True, help="Set OBSERVER ownership on this page")
 @click.option("--content", default=None, help="HTML content (inline)")
 @click.option("--content-file", type=click.Path(exists=True), default=None,
               help="Path to HTML file")
-@click.option("--folder", default=None, help="Folder name (created if it does not exist)")
-@click.option("--public", is_flag=True, help="Make visible to all players (OBSERVER)")
-def journal_upsert(title: str, content: str | None, content_file: str | None,
-                   folder: str | None, public: bool):
-    """Create or update a journal entry.
-
-    HTML content is read from --content, --content-file, or stdin.
+def page_upsert_cmd(journal_name: str, title: str, category_name: str | None,
+                    level: int, public: bool, content: str | None,
+                    content_file: str | None):
+    """Create or update a journal page.
 
     \b
-    Examples:
-      foundry journal upsert --title "Grimlash" --folder "NPCs" --public \\
-          --content "<p>Orc warlord of the eastern marches.</p>"
+    HTML content is read from --content, --content-file, or stdin.
+    --category must name an existing category (use category upsert first).
     """
     if content_file:
         content = Path(content_file).read_text()
@@ -314,26 +531,23 @@ def journal_upsert(title: str, content: str | None, content_file: str | None,
             raise click.UsageError(
                 "Provide --content, --content-file, or pipe HTML to stdin")
 
-    cfg = _load_config()
-    client = FoundryClient(cfg)
+    client = _make_client()
     try:
-        client.connect()
-        result = client.journal_upsert(title, content, folder=folder, public=public)
+        result = client.page_upsert(journal_name, title, category_name, level, public, content)
         click.echo(f"OK  {result['name']}  ({result['_id']})")
     finally:
         client.disconnect()
 
 
-@journal.command("delete")
-@click.option("--title", required=True, help="Exact name of the journal entry to delete")
-@click.confirmation_option(prompt="Delete this journal entry?")
-def journal_delete(title: str):
-    """Delete a journal entry by exact name."""
-    cfg = _load_config()
-    client = FoundryClient(cfg)
+@page.command("delete")
+@click.option("--journal", "journal_name", required=True)
+@click.option("--title", required=True, help="Exact page name")
+@click.confirmation_option(prompt="Delete this page?")
+def page_delete_cmd(journal_name: str, title: str):
+    """Delete a journal page."""
+    client = _make_client()
     try:
-        client.connect()
-        if client.journal_delete(title):
+        if client.page_delete(journal_name, title):
             click.echo(f"Deleted: {title}")
         else:
             click.echo(f"Not found: {title}", err=True)
