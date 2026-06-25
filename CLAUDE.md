@@ -30,12 +30,14 @@ foundry journal category list   --journal NAME [--json]
 foundry journal category upsert --journal NAME --name NAME
 foundry journal category delete --journal NAME --name NAME
 
-foundry journal page list   --journal NAME [--json]
-foundry journal page upsert --journal NAME --title NAME
-                            [--category NAME] [--level 1-6]
-                            [--public]
-                            [--content HTML | --content-file PATH | stdin]
-foundry journal page delete --journal NAME --title NAME
+foundry journal page list    --journal NAME [--json]
+foundry journal page upsert  --journal NAME --title NAME
+                             [--category NAME] [--level 1-6]
+                             [--before TITLE | --after TITLE]
+                             [--public]
+                             [--content HTML | --content-file PATH | stdin]
+foundry journal page reorder --journal NAME  (titles from stdin, one per line)
+foundry journal page delete  --journal NAME --title NAME
 ```
 
 All upsert operations are idempotent — safe to re-run. Entities are matched by name.

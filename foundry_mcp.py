@@ -102,15 +102,32 @@ def page_upsert(
     category: Optional[str] = None,
     level: int = 1,
     public: bool = False,
+    index: Optional[int] = None,
 ) -> dict:
     """Create or update a journal page. Idempotent.
 
     content is HTML. level controls sidebar indentation (1=top, 2=indented under
     the preceding level-1 page). category must already exist — call category_upsert
     first. public=True sets OBSERVER ownership so players can see this page.
+
+    index: 0-based position within the category. When set, all pages in the
+    category are reindexed with clean sort values so the page lands at that
+    position. Omit to leave sort order unchanged.
     """
     with _client() as c:
-        return c.page_upsert(journal, title, category, level, public, content)
+        return c.page_upsert(journal, title, category, level, public, content, index=index)
+
+
+@mcp.tool()
+def page_reorder(journal: str, order: list[str]) -> int:
+    """Set sort order for a list of pages. Returns the number of pages updated.
+
+    Assigns sort values 100000, 200000, ... to the listed pages in the given
+    order. Pages not in the list are left untouched. Use this to establish
+    ordering after bulk creation, or to fix sort conflicts.
+    """
+    with _client() as c:
+        return c.page_reorder(journal, order)
 
 
 @mcp.tool()

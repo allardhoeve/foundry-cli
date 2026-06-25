@@ -257,7 +257,10 @@ class FoundryClient:
         return pages
 
     def page_upsert(self, journal_name: str, title: str, category_name: str | None,
-                    level: int, public: bool, content: str) -> dict:
+                    level: int, public: bool, content: str,
+                    index: int | None = None,
+                    before: str | None = None,
+                    after: str | None = None) -> dict:
         j = self._find_journal(journal_name)
         parent_uuid = f"JournalEntry.{j['_id']}"
 
@@ -281,6 +284,35 @@ class FoundryClient:
         if category_id is not None:
             page_data["category"] = category_id
 
+        if before is not None or after is not None:
+            ref = before or after
+            ref_pages = sorted(
+                [p for p in j.get("pages", [])
+                 if p.get("category") == category_id and p["name"] != title],
+                key=lambda p: p.get("sort", 0),
+            )
+            names = [p["name"] for p in ref_pages]
+            if ref not in names:
+                raise click.ClickException(f"Reference page '{ref}' not found in category")
+            pos = names.index(ref)
+            index = pos if before else pos + 1
+
+        sort_updates: list[dict] = []
+        if index is not None:
+            cat_pages = sorted(
+                [p for p in j.get("pages", []) if p.get("category") == category_id],
+                key=lambda p: p.get("sort", 0),
+            )
+            cat_pages = [p for p in cat_pages if p["name"] != title]
+            n = max(0, min(index, len(cat_pages)))
+            ordered = cat_pages[:n] + [None] + cat_pages[n:]
+            for i, p in enumerate(ordered):
+                sort_val = (i + 1) * 100000
+                if p is None:
+                    page_data["sort"] = sort_val
+                else:
+                    sort_updates.append({"_id": p["_id"], "sort": sort_val})
+
         existing = [p for p in j.get("pages", []) if p["name"] == title]
         if existing:
             r = self._emit({
@@ -300,7 +332,33 @@ class FoundryClient:
                     "parentUuid": parent_uuid,
                 },
             })
+
+        if sort_updates:
+            self._emit({
+                "type": "JournalEntryPage",
+                "action": "update",
+                "operation": {"updates": sort_updates, "parentUuid": parent_uuid},
+            })
+
         return r["result"][0]
+
+    def page_reorder(self, journal_name: str, titles: list[str]) -> int:
+        j = self._find_journal(journal_name)
+        parent_uuid = f"JournalEntry.{j['_id']}"
+        by_name = {p["name"]: p for p in j.get("pages", [])}
+        missing = [t for t in titles if t not in by_name]
+        if missing:
+            raise click.ClickException(f"Pages not found: {', '.join(missing)}")
+        updates = [
+            {"_id": by_name[t]["_id"], "sort": (i + 1) * 100000}
+            for i, t in enumerate(titles)
+        ]
+        self._emit({
+            "type": "JournalEntryPage",
+            "action": "update",
+            "operation": {"updates": updates, "parentUuid": parent_uuid},
+        })
+        return len(updates)
 
     def page_delete(self, journal_name: str, title: str) -> bool:
         j = self._find_journal(journal_name)
@@ -338,7 +396,9 @@ _COMMAND_TREE = """\
   journal page list    --journal NAME  [--json]
   journal page upsert  --journal NAME  --title NAME
                        [--category NAME]  [--level 1-6]  [--public]
+                       [--before TITLE | --after TITLE]
                        [--content HTML | --content-file PATH | stdin]
+  journal page reorder --journal NAME  (titles from stdin, one per line)
   journal page delete  --journal NAME  --title NAME
 """
 
@@ -511,17 +571,24 @@ def page_list(journal_name: str, as_json: bool):
               help="Sidebar indentation level (1=top)")
 @click.option("--public", is_flag=True, help="Set OBSERVER ownership on this page")
 @click.option("--content", default=None, help="HTML content (inline)")
+@click.option("--before", default=None, metavar="TITLE",
+              help="Insert before this page (reindexes category)")
+@click.option("--after", default=None, metavar="TITLE",
+              help="Insert after this page (reindexes category)")
 @click.option("--content-file", type=click.Path(exists=True), default=None,
               help="Path to HTML file")
 def page_upsert_cmd(journal_name: str, title: str, category_name: str | None,
-                    level: int, public: bool, content: str | None,
-                    content_file: str | None):
+                    level: int, public: bool, before: str | None, after: str | None,
+                    content: str | None, content_file: str | None):
     """Create or update a journal page.
 
     \b
     HTML content is read from --content, --content-file, or stdin.
     --category must name an existing category (use category upsert first).
+    --before/--after reindex all pages in the category around the target.
     """
+    if before and after:
+        raise click.UsageError("Use --before or --after, not both")
     if content_file:
         content = Path(content_file).read_text()
     elif content is None:
@@ -533,7 +600,8 @@ def page_upsert_cmd(journal_name: str, title: str, category_name: str | None,
 
     client = _make_client()
     try:
-        result = client.page_upsert(journal_name, title, category_name, level, public, content)
+        result = client.page_upsert(journal_name, title, category_name, level, public, content,
+                                    before=before, after=after)
         click.echo(f"OK  {result['name']}  ({result['_id']})")
     finally:
         client.disconnect()
@@ -552,6 +620,28 @@ def page_delete_cmd(journal_name: str, title: str):
         else:
             click.echo(f"Not found: {title}", err=True)
             sys.exit(1)
+    finally:
+        client.disconnect()
+
+
+@page.command("reorder")
+@click.option("--journal", "journal_name", required=True)
+def page_reorder_cmd(journal_name: str):
+    """Set page sort order from stdin (one title per line).
+
+    \b
+    Assigns sort values 100000, 200000, ... to the listed pages in order.
+    Pages not listed are left untouched. Resolves any sort conflicts.
+    """
+    if sys.stdin.isatty():
+        raise click.UsageError("Pipe page titles (one per line) to stdin")
+    titles = [line.strip() for line in sys.stdin if line.strip()]
+    if not titles:
+        raise click.UsageError("No titles provided")
+    client = _make_client()
+    try:
+        n = client.page_reorder(journal_name, titles)
+        click.echo(f"Reordered {n} pages.")
     finally:
         client.disconnect()
 
