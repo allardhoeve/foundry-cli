@@ -117,8 +117,12 @@ class FoundryClient:
         self._check_world()
         self._http.get(f"{self._url}/join")
         user_id = self._discover_user_id()
+        # v14 rejects the join POST without a same-origin fetch header, and
+        # expects username + userId in place of the old lowercase userid.
         r = self._http.post(f"{self._url}/join",
-                            json={"action": "join", "userid": user_id,
+                            headers={"Sec-Fetch-Site": "same-origin"},
+                            json={"action": "join", "username": self._gm_user,
+                                  "userId": user_id,
                                   "password": self._gm_password})
         r.raise_for_status()
         self._sio.connect(self._url, headers=self._socket_headers(), transports=["websocket"])
