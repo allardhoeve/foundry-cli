@@ -10,6 +10,7 @@ Credentials are loaded from .env (or env vars):
 import base64
 import json
 import os
+import re
 import sys
 import threading
 from pathlib import Path
@@ -44,6 +45,69 @@ def _load_config() -> dict:
 _INHERIT  = -1
 _NONE     = 0
 _OBSERVER = 2
+
+
+# ── Shadowdark attack inputs ───────────────────────────────────────────────────
+
+# Effect keys that can change a to-hit roll: attack/damage roll bonuses,
+# item bonus blocks, and ability scores (which drive the modifier).
+_ATTACK_KEY = re.compile(
+    r"(^|\.)roll\.(melee|ranged|attack)\.|bonuses\..*attack|abilities\.\w+\.value",
+    re.IGNORECASE,
+)
+
+
+def _ability_mod(score: int) -> int:
+    return max(-4, min(4, (score - 10) // 2))
+
+
+def _effect_changes(effect: dict) -> list:
+    # v14 stores changes under effect.system.changes; older data uses effect.changes.
+    return effect.get("changes") or (effect.get("system") or {}).get("changes") or []
+
+
+def _attack_effects(effects: list, source: str, source_type: str) -> list[dict]:
+    rows = []
+    for e in effects:
+        for c in _effect_changes(e):
+            if _ATTACK_KEY.search(c.get("key", "")):
+                rows.append({
+                    "source":     source,
+                    "sourceType": source_type,
+                    "effect":     e.get("name", ""),
+                    "key":        c["key"],
+                    "type":       c.get("type", c.get("mode")),
+                    "value":      c.get("value"),
+                    "disabled":   bool(e.get("disabled")),
+                })
+    return rows
+
+
+def _attack_inputs(actor: dict) -> dict:
+    s = actor.get("system", {})
+    items = actor.get("items", [])
+    effects = _attack_effects(actor.get("effects", []), actor["name"], "Actor")
+    for i in items:
+        effects += _attack_effects(i.get("effects", []), i["name"], i["type"])
+    return {
+        "name":  actor["name"],
+        "type":  actor.get("type"),
+        "level": (s.get("level") or {}).get("value"),
+        "abilities": {
+            k: {"value": v["value"], "mod": _ability_mod(v["value"])}
+            for k, v in (s.get("abilities") or {}).items() if "value" in v
+        },
+        "weapons": [
+            {
+                "name":     i["name"],
+                "equipped": bool(i["system"].get("equipped")),
+                "bonuses":  {k: v for k, v in (i["system"].get("bonuses") or {}).items()
+                             if "attack" in k.lower() and v},
+            }
+            for i in items if i["type"] == "Weapon"
+        ],
+        "effects": effects,
+    }
 
 
 # ── Foundry client ─────────────────────────────────────────────────────────────
@@ -177,6 +241,17 @@ class FoundryClient:
 
     def get_actors(self) -> list:
         return self._get("Actor")
+
+    def actor_show(self, name: str | None = None) -> list[dict]:
+        """Attack-relevant inputs per Player actor (Shadowdark). Raw values, no math."""
+        actors = self.get_actors()
+        if name is not None:
+            actors = [a for a in actors if a["name"] == name]
+            if not actors:
+                raise click.ClickException(f"Actor '{name}' not found")
+        else:
+            actors = [a for a in actors if a.get("type") == "Player"]
+        return [_attack_inputs(a) for a in sorted(actors, key=lambda a: a["name"])]
 
     # ── Journal ───────────────────────────────────────────────────────────────
 
@@ -395,6 +470,7 @@ def _make_client() -> FoundryClient:
 
 _COMMAND_TREE = """\
   actor list  [--json]
+  actor show  [--name NAME]  [--json]
 
   journal list    [--json]
   journal upsert  --title NAME  [--folder FOLDER]  [--public]
@@ -449,6 +525,45 @@ def actor_list(as_json: bool):
             click.echo("-" * 72)
             for a in sorted(actors, key=lambda x: x["name"]):
                 click.echo(f"{a['name']:<40}  {a.get('type', ''):<10}  {a['_id']}")
+    finally:
+        client.disconnect()
+
+
+@actor.command("show")
+@click.option("--name", default=None, help="Actor name (default: all Player actors)")
+@click.option("--json", "as_json", is_flag=True)
+def actor_show(name: str | None, as_json: bool):
+    """Show attack-relevant inputs: abilities, weapons, and effects.
+
+    Values are shown as stored. Ability scores are base values before
+    effects, and effect formulas are not evaluated.
+    """
+    client = _make_client()
+    try:
+        rows = client.actor_show(name)
+        if as_json:
+            click.echo(json.dumps(rows, indent=2))
+            return
+        if not rows:
+            click.echo("No player actors.")
+            return
+        for r in rows:
+            click.echo(f"== {r['name']}  (level {r['level']})")
+            click.echo("  abilities: " + "  ".join(
+                f"{k.upper()} {v['value']} ({v['mod']:+d})" for k, v in r["abilities"].items()))
+            click.echo("  weapons:")
+            for w in r["weapons"]:
+                click.echo(f"    {w['name']:<28} equipped={w['equipped']}  {w['bonuses'] or ''}".rstrip())
+            if not r["weapons"]:
+                click.echo("    (none)")
+            click.echo("  effects touching roll.* / bonuses.*attack* / abilities:")
+            for e in r["effects"]:
+                src = "(actor)" if e["sourceType"] == "Actor" else f"{e['source']} [{e['sourceType']}]"
+                click.echo(f"    {src:<44} {e['effect']:<32} {e['key']} {e['type']} {e['value']}"
+                           + ("  [DISABLED]" if e["disabled"] else ""))
+            if not r["effects"]:
+                click.echo("    (none)")
+            click.echo()
     finally:
         client.disconnect()
 

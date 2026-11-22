@@ -22,6 +22,9 @@ Page ownership defaults to `INHERIT` (follows the parent journal). `--public` se
 ## Command structure
 
 ```
+foundry actor list [--json]
+foundry actor show [--name NAME] [--json]   (read-only; Shadowdark attack inputs)
+
 foundry journal list [--json]
 foundry journal upsert  --title NAME [--folder FOLDER] [--public]
 foundry journal delete  --title NAME

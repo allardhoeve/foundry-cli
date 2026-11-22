@@ -41,6 +41,20 @@ def actor_list() -> list:
         return c.get_actors()
 
 
+@mcp.tool()
+def actor_get(name: Optional[str] = None) -> list:
+    """Attack-relevant inputs for a Shadowdark actor, for debugging to-hit/damage.
+
+    Returns abilities (base score + modifier), weapons (equipped, attack
+    bonuses), and every effect touching roll.*, bonuses.*attack*, or ability
+    scores, with the item it comes from. Values are as stored: ability scores
+    are before effects and formulas like 1+floor(@level.value/2) are not
+    evaluated. Omit name to get all Player actors.
+    """
+    with _client() as c:
+        return c.actor_show(name)
+
+
 # ── Journal ────────────────────────────────────────────────────────────────────
 
 @mcp.tool()

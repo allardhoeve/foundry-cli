@@ -4,7 +4,7 @@ CLI and MCP server for managing [Foundry VTT](https://foundryvtt.com/) world con
 
 ## Scope
 
-This tool manages the **journal layer** of a Foundry world: journal entries, their categories, and their pages. It also lists actors. It is intentionally narrow — no scene management, no compendium access, no system-specific mechanics.
+This tool manages the **journal layer** of a Foundry world: journal entries, their categories, and their pages. It also lists actors and can show a read-only view of a Shadowdark character's attack inputs for debugging. It is intentionally narrow — no scene management, no compendium access, no editing of system-specific mechanics.
 
 The primary use case is AI-assisted world-building: an LLM writes lore entries via the MCP server while a GM reviews them in the Foundry UI in real time.
 
@@ -39,7 +39,10 @@ uv run python foundry.py [COMMAND] --help
 
 ```
 foundry actor list [--json]
+foundry actor show [--name NAME] [--json]
 ```
+
+`actor show` is a read-only debugging view for Shadowdark characters. It shows what feeds the to-hit and damage numbers: ability scores and modifiers, equipped weapons and their attack bonuses, and every effect that touches `roll.*`, `bonuses.*attack*` or ability scores, along with the item each effect comes from. Without `--name` it lists all Player actors. Values are shown as stored: ability scores are before effects and formulas are not evaluated. The final bonus is computed in the browser and is never stored, so it isn't shown.
 
 ### Journals
 
@@ -130,7 +133,7 @@ Register in an MCP client config:
 }
 ```
 
-Available tools: `actor_list`, `journal_list`, `journal_upsert`, `journal_delete`, `category_list`, `category_upsert`, `category_delete`, `page_list`, `page_upsert`, `page_reorder`, `page_delete`.
+Available tools: `actor_list`, `actor_get`, `journal_list`, `journal_upsert`, `journal_delete`, `category_list`, `category_upsert`, `category_delete`, `page_list`, `page_upsert`, `page_reorder`, `page_delete`.
 
 ## Testing
 
