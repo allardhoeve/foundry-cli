@@ -2,5 +2,4 @@ secrets.json
 data/Logs/
 data/container_cache/
 data/Config/
-data/Data/systems/
-data/Data/modules/
+data/Data/
