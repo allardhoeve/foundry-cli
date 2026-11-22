@@ -212,11 +212,14 @@ class FoundryClient:
             raise click.ClickException(r["error"].get("message", str(r["error"])))
         return r
 
-    def _get(self, doc_type: str, query: dict | None = None) -> list:
+    def _get(self, doc_type: str, query: dict | None = None, pack: str | None = None) -> list:
+        operation: dict = {"query": query or {}}
+        if pack is not None:
+            operation["pack"] = pack
         r = self._emit({
             "type": doc_type,
             "action": "get",
-            "operation": {"query": query or {}},
+            "operation": operation,
         })
         return r.get("result", [])
 
@@ -252,6 +255,29 @@ class FoundryClient:
         else:
             actors = [a for a in actors if a.get("type") == "Player"]
         return [_attack_inputs(a) for a in sorted(actors, key=lambda a: a["name"])]
+
+    # ── Compendium ────────────────────────────────────────────────────────────
+
+    def compendium_get(self, uuid: str) -> dict:
+        """Fetch one raw document by compendium UUID, e.g.
+        Compendium.shadowdark.properties.Item.jq0m0lGb7QOCSJXL"""
+        parts = uuid.split(".")
+        if len(parts) != 5 or parts[0] != "Compendium":
+            raise click.ClickException(
+                f"Not a compendium UUID: '{uuid}'. "
+                "Expected Compendium.<package>.<pack>.<Type>.<id>")
+        _, package, pack_name, doc_type, doc_id = parts
+        pack = f"{package}.{pack_name}"
+        try:
+            docs = self._get(doc_type, {"_id": doc_id}, pack=pack)
+        except click.ClickException as e:
+            # Foundry reports an unknown pack as a JS TypeError on packData.
+            if "packData" in e.message:
+                raise click.ClickException(f"Compendium pack '{pack}' not found") from None
+            raise
+        if not docs:
+            raise click.ClickException(f"Document '{doc_id}' not found in compendium '{pack}'")
+        return docs[0]
 
     # ── Journal ───────────────────────────────────────────────────────────────
 
@@ -472,6 +498,8 @@ _COMMAND_TREE = """\
   actor list  [--json]
   actor show  [--name NAME]  [--json]
 
+  compendium get UUID
+
   journal list    [--json]
   journal upsert  --title NAME  [--folder FOLDER]  [--public]
   journal delete  --title NAME
@@ -564,6 +592,26 @@ def actor_show(name: str | None, as_json: bool):
             if not r["effects"]:
                 click.echo("    (none)")
             click.echo()
+    finally:
+        client.disconnect()
+
+
+@cli.group()
+def compendium():
+    """Read compendium documents."""
+
+
+@compendium.command("get")
+@click.argument("uuid")
+def compendium_get(uuid: str):
+    """Print one raw compendium document as JSON.
+
+    UUID is a compendium link as it appears in actor data, e.g.
+    Compendium.shadowdark.properties.Item.jq0m0lGb7QOCSJXL
+    """
+    client = _make_client()
+    try:
+        click.echo(json.dumps(client.compendium_get(uuid), indent=2))
     finally:
         client.disconnect()
 

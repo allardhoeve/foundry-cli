@@ -55,6 +55,20 @@ def actor_get(name: Optional[str] = None) -> list:
         return c.actor_show(name)
 
 
+# ── Compendium ─────────────────────────────────────────────────────────────────
+
+@mcp.tool()
+def compendium_get(uuid: str) -> dict:
+    """Fetch one raw compendium document by UUID.
+
+    uuid is a compendium link as it appears in actor data, e.g.
+    Compendium.shadowdark.properties.Item.jq0m0lGb7QOCSJXL
+    (format: Compendium.<package>.<pack>.<Type>.<id>).
+    """
+    with _client() as c:
+        return c.compendium_get(uuid)
+
+
 # ── Journal ────────────────────────────────────────────────────────────────────
 
 @mcp.tool()
