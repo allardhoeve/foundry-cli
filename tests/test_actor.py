@@ -21,13 +21,18 @@ ACTOR = {
     ],
     "items": [
         {"name": "Longsword", "type": "Weapon", "effects": [],
-         "system": {"equipped": True, "bonuses": {"attackBonus": 1, "damageBonus": 0}}},
+         "system": {"type": "melee", "range": "close", "equipped": True,
+                    "bonuses": {"attackBonus": 1, "damageBonus": 0}}},
         {"name": "Mighty", "type": "Talent", "effects": [
             {"name": "Mighty", "system": {"changes": [
                 _change("system.roll.melee.bonus.all", 1),
                 _change("system.roll.melee.damage.all", 1),
                 _change("system.slots", 2),
             ]}},
+        ], "system": {}},
+        {"name": "+1 to Weapon Attacks", "type": "Talent", "effects": [
+            {"name": "Weapon Attack Bonus", "transfer": False,
+             "system": {"changes": [_change("system.roll.attack.bonus.all", 1)]}},
         ], "system": {}},
         {"name": "Old", "type": "Talent", "effects": [
             {"name": "Legacy", "changes": [{"key": "system.roll.ranged.bonus.all", "value": 1, "mode": 2}]},
@@ -52,7 +57,8 @@ def test_abilities_and_level():
 
 def test_weapon_attack_bonuses_only_nonzero():
     w = _attack_inputs(ACTOR)["weapons"]
-    assert w == [{"name": "Longsword", "equipped": True, "bonuses": {"attackBonus": 1}}]
+    assert w == [{"name": "Longsword", "type": "melee", "range": "close",
+                  "equipped": True, "bonuses": {"attackBonus": 1}}]
 
 
 def test_effects_filtered_with_source():
@@ -69,6 +75,13 @@ def test_actor_level_effect_disabled():
     assert e["sourceType"] == "Actor"
     assert e["type"] == "subtract"
     assert e["disabled"] is True
+
+
+def test_transfer_flag():
+    effects = {e["effect"]: e for e in _attack_inputs(ACTOR)["effects"]}
+    assert effects["Weapon Attack Bonus"]["transfer"] is False
+    assert effects["Mighty"]["transfer"] is True       # missing transfer defaults to true
+    assert effects["Rat disease"]["transfer"] is True  # actor effects always apply to the actor
 
 
 def test_legacy_changes_layout():

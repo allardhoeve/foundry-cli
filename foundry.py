@@ -79,6 +79,8 @@ def _attack_effects(effects: list, source: str, source_type: str) -> list[dict]:
                     "type":       c.get("type", c.get("mode")),
                     "value":      c.get("value"),
                     "disabled":   bool(e.get("disabled")),
+                    # Item effects with transfer=false never reach the actor.
+                    "transfer":   source_type == "Actor" or e.get("transfer", True) is not False,
                 })
     return rows
 
@@ -100,6 +102,8 @@ def _attack_inputs(actor: dict) -> dict:
         "weapons": [
             {
                 "name":     i["name"],
+                "type":     i["system"].get("type", ""),
+                "range":    i["system"].get("range", ""),
                 "equipped": bool(i["system"].get("equipped")),
                 "bonuses":  {k: v for k, v in (i["system"].get("bonuses") or {}).items()
                              if "attack" in k.lower() and v},
@@ -581,14 +585,16 @@ def actor_show(name: str | None, as_json: bool):
                 f"{k.upper()} {v['value']} ({v['mod']:+d})" for k, v in r["abilities"].items()))
             click.echo("  weapons:")
             for w in r["weapons"]:
-                click.echo(f"    {w['name']:<28} equipped={w['equipped']}  {w['bonuses'] or ''}".rstrip())
+                kind = f"{w['type']}/{w['range']}"
+                click.echo(f"    {w['name']:<28} {kind:<14} equipped={w['equipped']}  {w['bonuses'] or ''}".rstrip())
             if not r["weapons"]:
                 click.echo("    (none)")
             click.echo("  effects touching roll.* / bonuses.*attack* / abilities:")
             for e in r["effects"]:
                 src = "(actor)" if e["sourceType"] == "Actor" else f"{e['source']} [{e['sourceType']}]"
                 click.echo(f"    {src:<44} {e['effect']:<32} {e['key']} {e['type']} {e['value']}"
-                           + ("  [DISABLED]" if e["disabled"] else ""))
+                           + ("  [DISABLED]" if e["disabled"] else "")
+                           + ("  [NOT TRANSFERRED]" if not e["transfer"] else ""))
             if not r["effects"]:
                 click.echo("    (none)")
             click.echo()
