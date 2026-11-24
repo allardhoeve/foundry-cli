@@ -141,7 +141,7 @@ foundry hexmap list      --scene NAME [--json]
 
 ### Companion module: Foundry CLI Companion
 
-Optional. Foundry has no per-user show/hide for Drawings, so `module/` holds a small Foundry module that adds **Hex labels** and **Hex numbers** toggles to the Tokens toolbar. Each user shows or hides them on their own screen, or presses **L** (labels) and **N** (numbers); nothing is written to the world. Labels start hidden on every load. The keys can be rebound under Configure Controls.
+Optional. Foundry has no per-user show/hide for Drawings, so `module/` holds a small Foundry module that adds **Hex labels** and **Hex numbers** toggles to the Tokens toolbar. Each user shows or hides them on their own screen, or presses **L** or **H** (labels) and **N** (numbers); nothing is written to the world. Labels start hidden on every load. The keys can be rebound under Configure Controls.
 
 Install it in Foundry with this manifest URL:
 

@@ -1165,7 +1165,7 @@ _HEXMAP_HELP = """\
   Optional companion module "Foundry CLI Companion", in module/ of
   this repository: adds "Hex labels" and "Hex numbers" toggles to the
   Tokens toolbar, so each user can show or hide them on their own screen.
-  Keys: L toggles labels, N toggles numbers. Labels start switched off.
+  Keys: L or H toggles labels, N toggles numbers. Labels start switched off.
   Without the module, labels are always shown.
 """
 
