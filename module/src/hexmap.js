@@ -1,5 +1,5 @@
 /**
- * Hexmap Labels (foundry-cli).
+ * Foundry CLI Companion: hex-map toggles.
  *
  * Two buttons in the Tokens toolbar that show or hide, on your own screen only,
  * the hex labels and hex numbers that foundry-cli (`foundry hexmap`) draws on a

@@ -139,7 +139,7 @@ foundry hexmap list      --scene NAME [--json]
 
 **Look:** labels are Shadowdark blackletter, white on a near-solid black box, big enough to read when zoomed out; numbers are small Montserrat Bold tags. Both use the Shadowdark system's fonts.
 
-### Companion module: Hexmap Labels
+### Companion module: Foundry CLI Companion
 
 Optional. Foundry has no per-user show/hide for Drawings, so `module/` holds a small Foundry module that adds **Hex labels** and **Hex numbers** toggles to the Tokens toolbar. Each user shows or hides them on their own screen; nothing is written to the world. Labels start hidden on every load.
 

@@ -1140,7 +1140,7 @@ _HEXMAP_HELP = """\
   label or changes its visibility unless you ask it to. Changing a
   label's text resizes its box around where the label is now.
 
-  Optional companion module "Hexmap Labels (foundry-cli)", in module/ of
+  Optional companion module "Foundry CLI Companion", in module/ of
   this repository: adds "Hex labels" and "Hex numbers" toggles to the
   Tokens toolbar, so each user can show or hide them on their own screen.
   Labels start switched off. Without it, labels are always shown.

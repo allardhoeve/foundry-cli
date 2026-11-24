@@ -1,6 +1,6 @@
 name: Release module
 
-# Releases the Foundry module in module/ (Hexmap Labels). Tag it as
+# Releases the Foundry module in module/ (Foundry CLI Companion). Tag it as
 # module-vX.Y.Z; the CLI in this repository is not released through this.
 #
 # Foundry checks for updates by reading module.json from main (the manifest
