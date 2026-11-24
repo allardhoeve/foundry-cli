@@ -412,7 +412,7 @@ A map or encounter area.
 | `initial.x` | number | Initial view x position. |
 | `initial.y` | number | Initial view y position. |
 | `initial.scale` | number | Initial view scale. |
-| `grid.type` | number | `0`=gridless, `1`=square, `2`=hex rows, `3`=hex cols, `4`=hex rows odd, `5`=hex cols odd. |
+| `grid.type` | number | `0`=gridless, `1`=square, `2`=hex rows odd (HEXODDR, pointy-top), `3`=hex rows even (HEXEVENR), `4`=hex columns odd (HEXODDQ, flat-top), `5`=hex columns even (HEXEVENQ). |
 | `grid.size` | number | Pixels per grid unit. |
 | `grid.distance` | number | Real-world distance per grid unit. |
 | `grid.units` | string | Distance unit label (e.g. `"ft"`). |

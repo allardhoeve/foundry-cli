@@ -3,3 +3,5 @@ data/Logs/
 data/container_cache/
 data/Config/
 data/Data/
+data/public/
+data/lora/
