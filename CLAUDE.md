@@ -10,6 +10,12 @@ uv run python foundry.py [COMMAND] --help
 
 Credentials are loaded from `.env` (see `.env` for required keys). The active world must match `FOUNDRY_WORLD` — the tool errors clearly if it does not.
 
+## Live Foundry is read-only for agents
+
+`.env` points at the user's live game. Never write to it: no `upsert`, `delete` or `reorder` commands, no `hexmap` commands other than `list`, no write MCP tools (`*_upsert`, `*_delete`, `journal_page_reorder`, and every `hexmap_*` tool except `hexmap_list`), and no create/update/delete through `FoundryClient` internals. This also applies to "just testing" a change or fixing data you found broken. Report what needs changing and let the user do it.
+
+Reads (`list`, `show`, `get`) against live are fine. Anything that writes runs against the Docker test instance (`tests/.env.test`, via `uv run pytest`).
+
 ## Data model
 
 A **JournalEntry** is a named container in the Foundry sidebar. Each journal holds:
@@ -43,9 +49,22 @@ foundry journal page upsert  --journal NAME --title NAME
                              [--content HTML | --content-file PATH | stdin]
 foundry journal page reorder --journal NAME  (titles from stdin, one per line)
 foundry journal page delete  --journal NAME --title NAME
+
+foundry hexmap init|calibrate|numbers|label|unlabel|list --scene NAME ...
+                             (see `foundry hexmap --help` for the workflow)
 ```
 
 All upsert operations are idempotent — safe to re-run. Entities are matched by name.
+
+## MCP server
+
+`foundry_mcp.py` is generated from the CLI: every click command is a tool (`foundry hexmap label` → `hexmap_label`), its help text is the tool description, and a call runs the command in a subprocess. Never hand-write MCP tools; add or change the CLI command. A command that reads its input from stdin declares it with a `stdin_param` attribute. `tests/test_mcp.py` fails if a command has no tool.
+
+## Hex maps and the companion module
+
+`foundry hexmap` draws labels, hex numbers and calibration anchors as Drawings tagged `flags.world.hexmap.kind` = `label` | `number` | `anchor`. The Foundry module in `module/` (released separately via `module-v*` tags) relies on that flag to toggle labels and numbers per user. Change the flag on one side and you must change it on the other: `foundry.py` / `hexstyle.py` and `module/src/hexmap.js`.
+
+Text boxes are sized by measuring with the Shadowdark submodule's font files (`hexstyle.py`, Pillow). There is one style on purpose (bold, readable zoomed out); don't add presets without asking.
 
 ## Error handling
 

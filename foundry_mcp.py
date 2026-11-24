@@ -1,5 +1,18 @@
 #!/usr/bin/env python3
-"""MCP server for Foundry VTT — exposes journal/category/page tools.
+"""MCP server for Foundry VTT, generated from the foundry CLI.
+
+Every CLI command becomes one MCP tool, so the two never drift apart: add a
+command to foundry.py and it is a tool here too. `foundry hexmap label`
+becomes `hexmap_label`; its arguments and options become the tool's
+parameters; its help text (plus its group's workflow, if any) becomes the
+tool's description. Calling a tool runs the command in a subprocess.
+
+Generic handling:
+  --json          always passed when the command has it; the result is JSON.
+  --yes           (delete confirmations) always passed.
+  --flag/--other  boolean switches with no default become an optional boolean.
+  stdin           commands with a `stdin_param` attribute get that parameter,
+                  and its value is piped to the command.
 
 Run with:
     uv run python foundry_mcp.py
@@ -8,175 +21,196 @@ Or register in an MCP client config:
     {"command": "uv", "args": ["run", "python", "/path/to/foundry_mcp.py"]}
 """
 
-from contextlib import contextmanager
-from typing import Optional
+import inspect
+import json
+import re
+import subprocess
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
 
-from mcp.server.fastmcp import FastMCP
+import anyio
+import click
+import mcp.types as types
+from mcp.server.lowlevel import Server
+from mcp.server.stdio import stdio_server
 
-from foundry import FoundryClient, _load_config
+import foundry
 
-mcp = FastMCP("foundry")
+CLI_PATH = Path(foundry.__file__).resolve()
 
+INSTRUCTIONS = """\
+Tools for a Foundry VTT world: journals, actors, compendiums, and labels on
+hex-map scenes. Each tool runs the matching `foundry` CLI command, so help
+texts show CLI syntax: `--scene Landel` is the `scene` parameter, and
+`foundry hexmap label 0816 "Wormden Keep"` is hexmap_label(hex="0816",
+text="Wormden Keep")."""
 
-@contextmanager
-def _client():
-    c = FoundryClient(_load_config())
-    c.connect()
-    try:
-        yield c
-    finally:
-        c.disconnect()
-
-
-# ── Actor ──────────────────────────────────────────────────────────────────────
-
-@mcp.tool()
-def actor_list() -> list:
-    """List all actors in the active Foundry world.
-
-    Each actor includes _id, name, and type. Use Actor.<_id> as the UUID
-    when linking to an actor sheet from journal content.
-    """
-    with _client() as c:
-        return c.get_actors()
+_FORCED_FLAGS = {"as_json": "--json", "yes": "--yes"}
 
 
-@mcp.tool()
-def actor_get(name: Optional[str] = None) -> list:
-    """Attack-relevant inputs for a Shadowdark actor, for debugging to-hit/damage.
-
-    Returns abilities (base score + modifier), weapons (equipped, attack
-    bonuses), and every effect touching roll.*, bonuses.*attack*, or ability
-    scores, with the item it comes from. Values are as stored: ability scores
-    are before effects and formulas like 1+floor(@level.value/2) are not
-    evaluated. Omit name to get all Player actors.
-    """
-    with _client() as c:
-        return c.actor_show(name)
+@dataclass
+class _Param:
+    name: str                 # MCP parameter name
+    param: click.Parameter
+    schema: dict
+    required: bool
 
 
-# ── Compendium ─────────────────────────────────────────────────────────────────
+@dataclass
+class ToolSpec:
+    name: str
+    path: list[str]           # CLI words, e.g. ["hexmap", "label"]
+    description: str
+    params: list[_Param] = field(default_factory=list)
+    forced: list[str] = field(default_factory=list)   # flags always passed
+    stdin: tuple[str, str] | None = None
+    json_output: bool = False
 
-@mcp.tool()
-def compendium_get(uuid: str) -> dict:
-    """Fetch one raw compendium document by UUID.
+    def input_schema(self) -> dict:
+        props = {p.name: p.schema for p in self.params}
+        required = [p.name for p in self.params if p.required]
+        if self.stdin:
+            props[self.stdin[0]] = {"type": "string", "description": self.stdin[1]}
+            required.append(self.stdin[0])
+        return {"type": "object", "properties": props, "required": required,
+                "additionalProperties": False}
 
-    uuid is a compendium link as it appears in actor data, e.g.
-    Compendium.shadowdark.properties.Item.jq0m0lGb7QOCSJXL
-    (format: Compendium.<package>.<pack>.<Type>.<id>).
-    """
-    with _client() as c:
-        return c.compendium_get(uuid)
-
-
-# ── Journal ────────────────────────────────────────────────────────────────────
-
-@mcp.tool()
-def journal_list() -> list:
-    """List all journal entries in the active Foundry world."""
-    with _client() as c:
-        return c.get_journals()
-
-
-@mcp.tool()
-def journal_upsert(title: str, folder: Optional[str] = None, public: bool = False) -> dict:
-    """Create or update a journal entry by title. Idempotent.
-
-    public=True sets OBSERVER ownership so players can see the journal.
-    folder is created automatically if it does not exist.
-    """
-    with _client() as c:
-        return c.journal_upsert(title, folder=folder, public=public)
-
-
-@mcp.tool()
-def journal_delete(title: str) -> bool:
-    """Delete a journal entry by title. Returns False if not found."""
-    with _client() as c:
-        return c.journal_delete(title)
-
-
-# ── Category ───────────────────────────────────────────────────────────────────
-
-@mcp.tool()
-def category_list(journal: str) -> list:
-    """List all categories in a journal."""
-    with _client() as c:
-        return c.category_list(journal)
+    def argv(self, arguments: dict) -> tuple[list[str], str | None]:
+        """CLI arguments and stdin text for a tool call."""
+        args = list(self.path)
+        for p in self.params:
+            value = arguments.get(p.name)
+            if value is None:
+                continue
+            cp = p.param
+            if isinstance(cp, click.Argument):
+                args.append(str(value))
+            elif cp.is_flag and cp.secondary_opts:          # --public/--hidden
+                args.append(_long(cp.opts) if value else _long(cp.secondary_opts))
+            elif cp.is_flag:
+                if value:
+                    args.append(_long(cp.opts))
+            else:
+                args += [_long(cp.opts), str(value)]
+        args += self.forced
+        stdin = arguments.get(self.stdin[0]) if self.stdin else None
+        return args, stdin
 
 
-@mcp.tool()
-def category_upsert(journal: str, name: str) -> dict:
-    """Create a category within a journal. Idempotent.
-
-    Categories must exist before pages can reference them.
-    Common names: NPCs, Settlements, Factions, Locations.
-    """
-    with _client() as c:
-        return c.category_upsert(journal, name)
+def _long(opts: list[str]) -> str:
+    return max(opts, key=len)
 
 
-@mcp.tool()
-def category_delete(journal: str, name: str) -> bool:
-    """Delete a category from a journal by name. Returns False if not found."""
-    with _client() as c:
-        return c.category_delete(journal, name)
+def _clean_help(text: str | None) -> str:
+    """Click help text, dedented, without its \\b (backspace) no-rewrap markers."""
+    lines = [ln for ln in inspect.cleandoc(text or "").splitlines() if ln.strip() != "\b"]
+    return re.sub(r"\n{3,}", "\n\n", "\n".join(lines)).strip()
 
 
-# ── Page ───────────────────────────────────────────────────────────────────────
-
-@mcp.tool()
-def page_list(journal: str) -> list:
-    """List all pages in a journal.
-
-    Each page includes _category_name, title.level, and type fields.
-    """
-    with _client() as c:
-        return c.page_list(journal)
-
-
-@mcp.tool()
-def page_upsert(
-    journal: str,
-    title: str,
-    content: str,
-    category: Optional[str] = None,
-    level: int = 1,
-    public: bool = False,
-    index: Optional[int] = None,
-) -> dict:
-    """Create or update a journal page. Idempotent.
-
-    content is HTML. level controls sidebar indentation (1=top, 2=indented under
-    the preceding level-1 page). category must already exist — call category_upsert
-    first. public=True sets OBSERVER ownership so players can see this page.
-
-    index: 0-based position within the category. When set, all pages in the
-    category are reindexed with clean sort values so the page lands at that
-    position. Omit to leave sort order unchanged.
-    """
-    with _client() as c:
-        return c.page_upsert(journal, title, category, level, public, content, index=index)
+def _schema(p: click.Parameter) -> dict:
+    t = p.type
+    if isinstance(p, click.Option) and p.is_flag:
+        schema = {"type": "boolean"}
+    elif isinstance(t, click.Choice):
+        schema = {"type": "string", "enum": list(t.choices)}
+    elif isinstance(t, click.IntRange):
+        schema = {"type": "integer"}
+        if t.min is not None:
+            schema["minimum"] = t.min
+        if t.max is not None:
+            schema["maximum"] = t.max
+    elif isinstance(t, click.types.IntParamType):
+        schema = {"type": "integer"}
+    elif isinstance(t, click.types.FloatParamType):
+        schema = {"type": "number"}
+    else:
+        schema = {"type": "string"}
+    help_text = getattr(p, "help", None)
+    if isinstance(p, click.Option) and p.is_flag and p.secondary_opts:
+        help_text = (f"true = {_long(p.opts)}, false = {_long(p.secondary_opts)}, "
+                     f"omit to leave as is. {help_text or ''}").strip()
+    if help_text:
+        schema["description"] = help_text
+    return schema
 
 
-@mcp.tool()
-def page_reorder(journal: str, order: list[str]) -> int:
-    """Set sort order for a list of pages. Returns the number of pages updated.
-
-    Assigns sort values 100000, 200000, ... to the listed pages in the given
-    order. Pages not in the list are left untouched. Use this to establish
-    ordering after bulk creation, or to fix sort conflicts.
-    """
-    with _client() as c:
-        return c.page_reorder(journal, order)
+def _param_name(p: click.Parameter) -> str:
+    if isinstance(p, click.Argument):
+        return (p.metavar or p.name).lower()
+    return _long(p.opts).lstrip("-").replace("-", "_")
 
 
-@mcp.tool()
-def page_delete(journal: str, title: str) -> bool:
-    """Delete a page from a journal by title. Returns False if not found."""
-    with _client() as c:
-        return c.page_delete(journal, title)
+def build_specs(group: click.Group = foundry.cli) -> list[ToolSpec]:
+    """One ToolSpec per leaf command of the CLI."""
+    specs = []
+
+    def walk(cmd: click.Command, path: list[str], workflows: list[str]):
+        if isinstance(cmd, click.Group):
+            # The root group's epilog is the command overview; skip it.
+            flow = workflows + ([cmd.epilog] if path and cmd.epilog else [])
+            for name, sub in cmd.commands.items():
+                walk(sub, path + [name], flow)
+            return
+        spec = ToolSpec(name="_".join(path), path=path, description="")
+        for p in cmd.params:
+            if p.name in _FORCED_FLAGS:
+                spec.forced.append(_FORCED_FLAGS[p.name])
+                spec.json_output |= p.name == "as_json"
+                continue
+            tri_state = isinstance(p, click.Option) and p.is_flag and p.secondary_opts
+            spec.params.append(_Param(
+                name=_param_name(p), param=p, schema=_schema(p),
+                required=bool(p.required) and not tri_state))
+        spec.stdin = getattr(cmd.callback, "stdin_param", None) or getattr(cmd, "stdin_param", None)
+        parts = [_clean_help(cmd.help)] + [_clean_help(w) for w in workflows]
+        spec.description = "\n\n".join(x for x in parts if x)
+        specs.append(spec)
+
+    walk(group, [], [])
+    return specs
+
+
+def run_tool(spec: ToolSpec, arguments: dict) -> tuple[bool, str]:
+    """Run the CLI command for a tool call. Returns (ok, output)."""
+    args, stdin = spec.argv(arguments)
+    proc = subprocess.run([sys.executable, str(CLI_PATH), *args],
+                          input=stdin or "", capture_output=True, text=True)
+    out = proc.stdout.strip()
+    if proc.returncode != 0:
+        return False, "\n".join(x for x in (out, proc.stderr.strip()) if x)
+    return True, out
+
+
+def make_server() -> Server:
+    specs = {s.name: s for s in build_specs()}
+    server = Server("foundry", instructions=INSTRUCTIONS)
+
+    @server.list_tools()
+    async def list_tools() -> list[types.Tool]:
+        return [types.Tool(name=s.name, description=s.description,
+                           inputSchema=s.input_schema()) for s in specs.values()]
+
+    @server.call_tool()
+    async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+        spec = specs.get(name)
+        if spec is None:
+            raise ValueError(f"Unknown tool: {name}")
+        ok, out = await anyio.to_thread.run_sync(run_tool, spec, arguments or {})
+        if not ok:
+            raise RuntimeError(out or f"foundry {' '.join(spec.path)} failed")
+        if spec.json_output and out:
+            out = json.dumps(json.loads(out), indent=2)
+        return [types.TextContent(type="text", text=out or "OK")]
+
+    return server
+
+
+async def _main():
+    server = make_server()
+    async with stdio_server() as (read, write):
+        await server.run(read, write, server.create_initialization_options())
 
 
 if __name__ == "__main__":
-    mcp.run()
+    anyio.run(_main)

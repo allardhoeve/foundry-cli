@@ -1,0 +1,46 @@
+name: Release module
+
+# Releases the Foundry module in module/ (Hexmap Labels). Tag it as
+# module-vX.Y.Z; the CLI in this repository is not released through this.
+#
+# Foundry checks for updates by reading module.json from main (the manifest
+# URL), so bump module.json's version and download URL on main first, then tag
+# that commit. This workflow refuses to release if they don't match the tag.
+
+on:
+  push:
+    tags:
+      - "module-v*"
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check module.json matches the tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#module-v}"
+          EXPECTED_DOWNLOAD="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}/module.zip"
+          ACTUAL_VERSION=$(jq -r .version module/module.json)
+          ACTUAL_DOWNLOAD=$(jq -r .download module/module.json)
+          if [ "$ACTUAL_VERSION" != "$VERSION" ]; then
+            echo "::error::module/module.json version is $ACTUAL_VERSION, tag is $VERSION"; exit 1
+          fi
+          if [ "$ACTUAL_DOWNLOAD" != "$EXPECTED_DOWNLOAD" ]; then
+            echo "::error::module/module.json download is $ACTUAL_DOWNLOAD, expected $EXPECTED_DOWNLOAD"; exit 1
+          fi
+
+      - name: Create release zip
+        run: |
+          cd module
+          zip -r ../module.zip module.json src/ lang/
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: module.zip
+          generate_release_notes: true

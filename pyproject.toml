@@ -9,6 +9,7 @@ dependencies = [
     "requests>=2.0",
     "python-dotenv>=1.0",
     "mcp>=1.0",
+    "pillow>=13.0.0",
 ]
 
 [dependency-groups]

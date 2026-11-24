@@ -20,6 +20,9 @@ import requests
 import socketio
 from dotenv import load_dotenv
 
+import hexgrid
+import hexstyle
+
 load_dotenv(Path(__file__).parent / ".env")
 
 
@@ -184,7 +187,7 @@ class FoundryClient:
     def connect(self):
         self._check_world()
         self._http.get(f"{self._url}/join")
-        user_id = self._discover_user_id()
+        user_id = self._user_id = self._discover_user_id()
         # v14 rejects the join POST without a same-origin fetch header, and
         # expects username + userId in place of the old lowercase userid.
         r = self._http.post(f"{self._url}/join",
@@ -489,6 +492,242 @@ class FoundryClient:
         })
         return True
 
+    # ── Hex map ───────────────────────────────────────────────────────────────
+    # Everything the tool draws on a scene is a Drawing tagged with
+    # flags.world.hexmap = {"kind": "anchor" | "number" | "label", "hex": "CCRR"}.
+    # The scene keeps its setup and calibration in flags.world.hexmap.
+
+    def _find_scene(self, name: str) -> dict:
+        scenes = self._get("Scene")
+        matches = [s for s in scenes if s["name"] == name]
+        if not matches:
+            names = ", ".join(sorted(s["name"] for s in scenes)) or "(none)"
+            raise click.ClickException(f"Scene '{name}' not found. Scenes: {names}")
+        if len(matches) > 1:
+            raise click.ClickException(
+                f"{len(matches)} scenes are named '{name}'; rename one so the name is unique")
+        scene = matches[0]
+        grid_type = scene.get("grid", {}).get("type")
+        try:
+            hexgrid.orientation_for(grid_type)
+        except ValueError:
+            raise click.ClickException(
+                f"Scene '{name}' does not use a hex grid (grid type {grid_type}). "
+                "Set a hexagonal grid in the scene's Grid settings first.") from None
+        return scene
+
+    @staticmethod
+    def _hexmap_cfg(scene: dict) -> dict:
+        return scene.get("flags", {}).get("world", {}).get("hexmap", {})
+
+    @staticmethod
+    def _hexmap_drawings(scene: dict, kind: str) -> list[dict]:
+        return [d for d in scene.get("drawings", [])
+                if d.get("flags", {}).get("world", {}).get("hexmap", {}).get("kind") == kind]
+
+    def _require_calibration(self, scene: dict) -> dict:
+        cfg = self._hexmap_cfg(scene)
+        if "calibration" not in cfg:
+            n = scene["name"]
+            if "size" not in cfg:
+                raise click.ClickException(
+                    f"Scene '{n}' has no hex map setup yet. Start with:\n"
+                    f'  foundry hexmap init --scene "{n}" --size COLSxROWS')
+            raise click.ClickException(
+                f"Scene '{n}' is not calibrated yet. Drag the two anchor hexagons onto "
+                f"their printed hexes, then run:\n  foundry hexmap calibrate --scene \"{n}\"")
+        return cfg
+
+    def _scene_emit(self, scene: dict, action: str, operation: dict) -> dict:
+        operation["parentUuid"] = f"Scene.{scene['_id']}"
+        return self._emit({"type": "Drawing", "action": action, "operation": operation})
+
+    def _drawing_base(self, scene: dict, kind: str, hex_id: str) -> dict:
+        data = {"author": self._user_id,
+                "flags": {"world": {"hexmap": {"kind": kind, "hex": hex_id}}}}
+        level = scene.get("initialLevel")
+        if level:
+            data["levels"] = [level]
+        return data
+
+    def _boxed_drawing(self, scene: dict, kind: str, hex_id: str, text: str,
+                       x: float, y: float, style: dict, hidden: bool) -> dict:
+        """Text in a filled box, visibly centred on (x, y)."""
+        return (self._drawing_base(scene, kind, hex_id)
+                | hexstyle.boxed_text(text, x, y, style) | {"hidden": hidden})
+
+    def _scene_update_cfg(self, scene: dict, cfg: dict) -> None:
+        self._emit({
+            "type": "Scene", "action": "update",
+            "operation": {"updates": [{"_id": scene["_id"],
+                                       "flags": {"world": {"hexmap": cfg}}}]},
+        })
+
+    def hexmap_init(self, scene_name: str, size: tuple[int, int], shifted: str) -> list[dict]:
+        """Place (or keep) the two anchor hexagons. Returns the anchors."""
+        scene = self._find_scene(scene_name)
+        grid = scene["grid"]
+        orientation = hexgrid.orientation_for(grid["type"])
+        cols, rows = size
+        wanted = [(1, 1), (cols, rows)]
+        wanted_ids = [hexgrid.fmt_hex(c, r) for c, r in wanted]
+
+        existing = {d["flags"]["world"]["hexmap"]["hex"]: d
+                    for d in self._hexmap_drawings(scene, "anchor")}
+        stale = [d["_id"] for h, d in existing.items() if h not in wanted_ids]
+        if stale:
+            self._scene_emit(scene, "delete", {"ids": stale})
+
+        w, h = hexgrid.hex_dims(grid["size"], orientation)
+        rx, ry, rw, rh = hexgrid.scene_rect(scene["width"], scene["height"],
+                                            scene.get("padding", 0), grid["size"], orientation)
+        # Rough first guess: one hex in from the scene's top-left and bottom-right.
+        guesses = {wanted_ids[0]: (rx + w, ry + h), wanted_ids[1]: (rx + rw - w, ry + rh - h)}
+        new = []
+        for hex_id in wanted_ids:
+            if hex_id in existing:
+                continue
+            cx, cy = guesses[hex_id]
+            new.append(self._drawing_base(scene, "anchor", hex_id) | {
+                "x": round(cx - w / 2), "y": round(cy - h / 2),
+                "shape": {"type": "p", "width": round(w), "height": round(h),
+                          "points": hexgrid.hexagon_points(round(w), round(h), orientation)},
+                "strokeWidth": 6, "strokeColor": "#ff00ff", "strokeAlpha": 1,
+                "fillType": 0, "fillAlpha": 0,
+                "text": f"ANCHOR\n{hex_id}", "fontSize": 36, "textColor": "#ff00ff",
+                "textAlpha": 1, "hidden": True,
+            })
+        if new:
+            self._scene_emit(scene, "create", {"data": new})
+
+        cfg = dict(self._hexmap_cfg(scene))
+        cfg.update({"size": [cols, rows], "shifted": shifted})
+        self._scene_update_cfg(scene, cfg)
+        scene = self._find_scene(scene_name)
+        return self._hexmap_drawings(scene, "anchor")
+
+    def hexmap_calibrate(self, scene_name: str, label_pos: str | None = None) -> dict:
+        scene = self._find_scene(scene_name)
+        cfg = dict(self._hexmap_cfg(scene))
+        if "size" not in cfg:
+            raise click.ClickException(
+                f"Scene '{scene_name}' has no anchors yet. Start with:\n"
+                f'  foundry hexmap init --scene "{scene_name}" --size COLSxROWS')
+        cols, rows = cfg["size"]
+        anchor_ids = [hexgrid.fmt_hex(1, 1), hexgrid.fmt_hex(cols, rows)]
+        anchors = {d["flags"]["world"]["hexmap"]["hex"]: d
+                   for d in self._hexmap_drawings(scene, "anchor")}
+        missing = [h for h in anchor_ids if h not in anchors]
+        if missing:
+            raise click.ClickException(
+                f"Anchor(s) {', '.join(missing)} not found on '{scene_name}' (deleted?). "
+                f"Recreate them with:\n  foundry hexmap init --scene \"{scene_name}\" "
+                f"--size {cols}x{rows}")
+
+        def centre(d):
+            return d["x"] + d["shape"]["width"] / 2, d["y"] + d["shape"]["height"] / 2
+
+        grid = scene["grid"]
+        orientation = hexgrid.orientation_for(grid["type"])
+        a, b = (anchors[h] for h in anchor_ids)
+        cal = hexgrid.calibrate((1, 1), centre(a), (cols, rows), centre(b),
+                                orientation, cfg["shifted"])
+        exp_col, exp_row = hexgrid.expected_steps(grid["size"], orientation)
+        warnings = []
+        for what, got, exp in (("column", cal["col_step"], exp_col),
+                               ("row", cal["row_step"], exp_row)):
+            if abs(got - exp) / exp > 0.03:
+                warnings.append(
+                    f"{what} step is {got:.1f}px but the scene grid implies {exp:.1f}px. "
+                    "An anchor may be on the wrong hex, or the grid size doesn't match the map.")
+        cfg["calibration"] = cal
+        cfg["label_pos"] = label_pos or cfg.get("label_pos", "bottom")
+        self._scene_update_cfg(scene, cfg)
+        return {"calibration": cal, "expected": {"col_step": exp_col, "row_step": exp_row},
+                "label_pos": cfg["label_pos"], "warnings": warnings}
+
+    def hexmap_numbers(self, scene_name: str, remove: bool = False) -> int:
+        """Replace the hex-number layer (or just remove it). Returns hexes drawn.
+
+        Numbers aren't secret: they're visible to players too, and each user
+        switches them on or off with the homebrew module's toolbar toggle."""
+        scene = self._find_scene(scene_name)
+        old = [d["_id"] for d in self._hexmap_drawings(scene, "number")]
+        if old:
+            self._scene_emit(scene, "delete", {"ids": old})
+        if remove:
+            return 0
+        cfg = self._require_calibration(scene)
+        cal, (cols, rows) = cfg["calibration"], cfg["size"]
+        data = []
+        for c in range(1, cols + 1):
+            for r in range(1, rows + 1):
+                x, y = hexgrid.number_point(cal, c, r)
+                hex_id = hexgrid.fmt_hex(c, r)
+                data.append(self._boxed_drawing(scene, "number", hex_id, hex_id, x, y,
+                                                hexstyle.NUMBER_STYLE, hidden=False))
+        self._scene_emit(scene, "create", {"data": data})
+        return len(data)
+
+    def hexmap_label(self, scene_name: str, hex_str: str, text: str | None,
+                     public: bool | None, pos: str | None) -> dict:
+        scene = self._find_scene(scene_name)
+        cfg = self._require_calibration(scene)
+        try:
+            col, row = hexgrid.parse_hex(hex_str, tuple(cfg["size"]))
+        except ValueError as e:
+            raise click.ClickException(str(e)) from None
+        hex_id = hexgrid.fmt_hex(col, row)
+        existing = [d for d in self._hexmap_drawings(scene, "label")
+                    if d["flags"]["world"]["hexmap"]["hex"] == hex_id]
+        cal = cfg["calibration"]
+
+        if existing:
+            d = existing[0]
+            update: dict = {"_id": d["_id"]}
+            if public is not None:
+                update["hidden"] = not public
+            if text is not None or pos is not None:
+                # Re-box around the label's current centre (which may have been
+                # dragged by hand), or around the requested position.
+                x, y = (hexgrid.label_point(cal, col, row, pos) if pos is not None
+                        else hexstyle.box_centre(d))
+                box = hexstyle.boxed_text(text if text is not None else d.get("text", ""),
+                                          x, y, hexstyle.LABEL_STYLE)
+                update |= {k: box[k] for k in ("x", "y", "shape", "text")}
+            self._scene_emit(scene, "update", {"updates": [update]})
+            return d | update | {"_hex": hex_id, "_created": False}
+
+        if text is None:
+            raise click.ClickException(
+                f"Hex {hex_id} has no label yet; give its text, e.g.\n"
+                f'  foundry hexmap label {hex_id} "POI name" --scene "{scene_name}"')
+        x, y = hexgrid.label_point(cal, col, row, pos or cfg["label_pos"])
+        data = self._boxed_drawing(scene, "label", hex_id, text, x, y,
+                                   hexstyle.LABEL_STYLE, hidden=not public)
+        r = self._scene_emit(scene, "create", {"data": [data]})
+        return r["result"][0] | {"_hex": hex_id, "_created": True}
+
+    def hexmap_list(self, scene_name: str) -> list[dict]:
+        scene = self._find_scene(scene_name)
+        labels = self._hexmap_drawings(scene, "label")
+        return sorted(({"hex": d["flags"]["world"]["hexmap"]["hex"], "text": d.get("text", ""),
+                        "hidden": d.get("hidden", False), "_id": d["_id"]} for d in labels),
+                      key=lambda l: l["hex"])
+
+    def hexmap_unlabel(self, scene_name: str, hex_str: str) -> bool:
+        scene = self._find_scene(scene_name)
+        try:
+            hex_id = hexgrid.fmt_hex(*hexgrid.parse_hex(hex_str))
+        except ValueError as e:
+            raise click.ClickException(str(e)) from None
+        ids = [d["_id"] for d in self._hexmap_drawings(scene, "label")
+               if d["flags"]["world"]["hexmap"]["hex"] == hex_id]
+        if not ids:
+            return False
+        self._scene_emit(scene, "delete", {"ids": ids})
+        return True
+
 
 # ── CLI ─────────────────────────────────────────────────────────────────────────
 
@@ -519,6 +758,13 @@ _COMMAND_TREE = """\
                        [--content HTML | --content-file PATH | stdin]
   journal page reorder --journal NAME  (titles from stdin, one per line)
   journal page delete  --journal NAME  --title NAME
+
+  hexmap init      --scene NAME  --size COLSxROWS  [--shifted even|odd]
+  hexmap calibrate --scene NAME  [--label-pos top|center|bottom]
+  hexmap numbers   --scene NAME  [--remove]
+  hexmap label     HEX [TEXT]  --scene NAME  [--public | --hidden]  [--pos POS]
+  hexmap unlabel   HEX  --scene NAME
+  hexmap list      --scene NAME  [--json]
 """
 
 
@@ -798,9 +1044,10 @@ def page_upsert_cmd(journal_name: str, title: str, category_name: str | None,
     if content_file:
         content = Path(content_file).read_text()
     elif content is None:
-        if not sys.stdin.isatty():
-            content = sys.stdin.read()
-        else:
+        # Empty stdin counts as no content: never blank a page by accident
+        # (the MCP server runs this command with an empty stdin).
+        content = "" if sys.stdin.isatty() else sys.stdin.read()
+        if not content.strip():
             raise click.UsageError(
                 "Provide --content, --content-file, or pipe HTML to stdin")
 
@@ -848,6 +1095,233 @@ def page_reorder_cmd(journal_name: str):
     try:
         n = client.page_reorder(journal_name, titles)
         click.echo(f"Reordered {n} pages.")
+    finally:
+        client.disconnect()
+
+
+# Commands that read their main input from stdin tell the MCP server how to
+# expose it: (parameter name, description).
+page_reorder_cmd.stdin_param = ("titles", "Page titles in the new order, one per line.")
+
+
+# ── hexmap ────────────────────────────────────────────────────────────────────
+
+_HEXMAP_HELP = """\
+  Hex numbers are CCRR: column then row, both from 01, as printed on the
+  map. 0816 = column 08, row 16; "816" means the same.
+
+  One-time setup per scene:
+
+  1. foundry hexmap init --scene Landel --size 10x17
+       Places two magenta anchor hexagons (GM-only) for the corner
+       hexes 0101 and 1017. --size is the map's columns x rows.
+  2. In Foundry, drag each anchor until its outline sits exactly on
+       the printed hex with that number. Move only; don't resize.
+       If the scene's grid is aligned to the map, the anchor snaps
+       onto the hex for you.
+  3. foundry hexmap calibrate --scene Landel
+       Reads the anchors and stores the grid on the scene.
+  4. foundry hexmap numbers --scene Landel
+       Puts a number tag in the top of every hex. Check they all sit
+       in their hexes; if not, drag the anchors, calibrate, and run
+       numbers again (it replaces the old ones).
+       Numbers are visible to players too. Remove them with --remove.
+
+  Labels (one per hex; new labels start hidden from players):
+
+    foundry hexmap label 0816 "Wormden Keep" --scene Landel
+    foundry hexmap label 0816 --public --scene Landel     (reveal)
+    foundry hexmap label 0816 --hidden --scene Landel     (hide again)
+    foundry hexmap unlabel 0816 --scene Landel
+    foundry hexmap list --scene Landel
+
+  Labels are ordinary Foundry Drawings: you can also drag them and
+  hide/reveal them by hand (right-click > eye). The CLI never moves a
+  label or changes its visibility unless you ask it to. Changing a
+  label's text resizes its box around where the label is now.
+
+  Optional companion module "Hexmap Labels (foundry-cli)", in module/ of
+  this repository: adds "Hex labels" and "Hex numbers" toggles to the
+  Tokens toolbar, so each user can show or hide them on their own screen.
+  Labels start switched off. Without it, labels are always shown.
+"""
+
+
+class _WorkflowGroup(click.Group):
+    """A group whose epilog is a verbatim workflow description. The MCP server
+    adds the same text to the description of every tool in the group."""
+    def format_epilog(self, ctx, formatter):
+        if self.epilog:
+            formatter.write_paragraph()
+            formatter.write("Workflow:\n\n")
+            formatter.write(self.epilog)
+
+
+_scene_opt = click.option("--scene", "scene_name", required=True,
+                          help="Scene name, exactly as in Foundry's sidebar.")
+
+
+@cli.group(cls=_WorkflowGroup, epilog=_HEXMAP_HELP)
+def hexmap():
+    """Put labels on a hex map scene (POI names, GM-only or public)."""
+
+
+@hexmap.command("init")
+@_scene_opt
+@click.option("--size", required=True, metavar="COLSxROWS",
+              help="Columns x rows of the printed map, e.g. 10x17.")
+@click.option("--shifted", type=click.Choice(["even", "odd"]), default="even",
+              show_default=True,
+              help="Which rows (pointy-top) or columns (flat-top) are pushed half a hex.")
+def hexmap_init_cmd(scene_name: str, size: str, shifted: str):
+    """Place the two anchor hexagons used for calibration.
+
+    \b
+    Example:
+      foundry hexmap init --scene Landel --size 10x17
+    Safe to re-run: anchors you already dragged stay where they are.
+    Then drag the anchors onto their printed hexes and run calibrate.
+    """
+    try:
+        cols_rows = hexgrid.parse_size(size)
+    except ValueError as e:
+        raise click.BadParameter(str(e), param_hint="--size") from None
+    client = _make_client()
+    try:
+        anchors = client.hexmap_init(scene_name, cols_rows, shifted)
+        hexes = sorted(d["flags"]["world"]["hexmap"]["hex"] for d in anchors)
+        click.echo(f"Anchors on '{scene_name}': {', '.join(hexes)} (GM-only, magenta).")
+        click.echo("Next: in Foundry, drag each anchor so its outline sits exactly on the")
+        click.echo("printed hex with that number, then run:")
+        click.echo(f'  foundry hexmap calibrate --scene "{scene_name}"')
+    finally:
+        client.disconnect()
+
+
+@hexmap.command("calibrate")
+@_scene_opt
+@click.option("--label-pos", type=click.Choice(list(hexgrid.LABEL_POSITIONS)),
+              help="Where labels sit within a hex (default: bottom, or the previous choice).")
+def hexmap_calibrate_cmd(scene_name: str, label_pos: str | None):
+    """Read the anchors and store the hex grid on the scene.
+
+    \b
+    Example:
+      foundry hexmap calibrate --scene Landel
+    Re-run any time after moving the anchors. Existing labels and
+    numbers are not moved; re-run numbers, and re-place a label with:
+    hexmap label HEX --pos bottom
+    """
+    client = _make_client()
+    try:
+        r = client.hexmap_calibrate(scene_name, label_pos)
+        cal, exp = r["calibration"], r["expected"]
+        click.echo(f"Calibrated '{scene_name}': hex 0101 centre at "
+                   f"({cal['origin'][0]:.0f}, {cal['origin'][1]:.0f})")
+        click.echo(f"  column step {cal['col_step']:.1f}px (grid: {exp['col_step']:.1f})")
+        click.echo(f"  row step    {cal['row_step']:.1f}px (grid: {exp['row_step']:.1f})")
+        click.echo(f"  labels at   {r['label_pos']}")
+        for w in r["warnings"]:
+            click.echo(f"WARNING: {w}", err=True)
+        click.echo(f'Check it: foundry hexmap numbers --scene "{scene_name}"')
+    finally:
+        client.disconnect()
+
+
+@hexmap.command("numbers")
+@_scene_opt
+@click.option("--remove", is_flag=True, help="Remove the numbers instead of drawing them.")
+def hexmap_numbers_cmd(scene_name: str, remove: bool):
+    """Put a number tag in the top of every hex (visible to everyone).
+
+    \b
+    Examples:
+      foundry hexmap numbers --scene Landel           draw (replaces old ones)
+      foundry hexmap numbers --scene Landel --remove  remove them
+    Also the check after calibrating. Labels are never touched.
+    """
+    client = _make_client()
+    try:
+        n = client.hexmap_numbers(scene_name, remove)
+        if remove:
+            click.echo(f"Removed hex numbers from '{scene_name}'.")
+        else:
+            click.echo(f"Drew {n} hex numbers on '{scene_name}' (visible to players). "
+                       "Remove them with:")
+            click.echo(f'  foundry hexmap numbers --scene "{scene_name}" --remove')
+    finally:
+        client.disconnect()
+
+
+@hexmap.command("label")
+@click.argument("hex_id", metavar="HEX")
+@click.argument("text", required=False)
+@_scene_opt
+@click.option("--public/--hidden", "public", default=None,
+              help="Show to players / hide from players. Omit to leave as is "
+                   "(new labels start hidden).")
+@click.option("--pos", type=click.Choice(list(hexgrid.LABEL_POSITIONS)),
+              help="Re-place the label within its hex (default: the scene's label position).")
+def hexmap_label_cmd(hex_id: str, text: str | None, scene_name: str,
+                     public: bool | None, pos: str | None):
+    """Create or update the label on one hex.
+
+    \b
+    Examples:
+      foundry hexmap label 0816 "Wormden Keep" --scene Landel   (new, GM-only)
+      foundry hexmap label 0816 --public --scene Landel         (reveal)
+      foundry hexmap label 1015 "Wormden" --scene Landel        (another hex)
+    Changing the text keeps the label's position and visibility.
+    """
+    if text is None and public is None and pos is None:
+        raise click.UsageError("Give TEXT, --public/--hidden, or --pos")
+    client = _make_client()
+    try:
+        d = client.hexmap_label(scene_name, hex_id, text, public, pos)
+        state = "GM only" if d.get("hidden") else "players"
+        verb = "Created" if d["_created"] else "Updated"
+        click.echo(f"{verb} {d['_hex']}  {d.get('text', '')!r}  ({state})")
+    finally:
+        client.disconnect()
+
+
+@hexmap.command("unlabel")
+@click.argument("hex_id", metavar="HEX")
+@_scene_opt
+def hexmap_unlabel_cmd(hex_id: str, scene_name: str):
+    """Remove the label from one hex.
+
+    \b
+    Example:
+      foundry hexmap unlabel 0816 --scene Landel
+    """
+    client = _make_client()
+    try:
+        if not client.hexmap_unlabel(scene_name, hex_id):
+            raise click.ClickException(f"No label on hex {hex_id} in '{scene_name}'")
+        click.echo(f"Removed label from {hex_id}.")
+    finally:
+        client.disconnect()
+
+
+@hexmap.command("list")
+@_scene_opt
+@click.option("--json", "as_json", is_flag=True)
+def hexmap_list_cmd(scene_name: str, as_json: bool):
+    """List the labels on a scene, with who can see them."""
+    client = _make_client()
+    try:
+        labels = client.hexmap_list(scene_name)
+        if as_json:
+            click.echo(json.dumps(labels, indent=2))
+            return
+        if not labels:
+            click.echo("No labels.")
+            return
+        click.echo(f"{'HEX':<6}{'VISIBLE':<10}TEXT")
+        for l in labels:
+            vis = "GM only" if l["hidden"] else "players"
+            click.echo(f"{l['hex']:<6}{vis:<10}{l['text']}")
     finally:
         client.disconnect()
 

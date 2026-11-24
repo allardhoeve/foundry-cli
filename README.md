@@ -4,7 +4,7 @@ CLI and MCP server for managing [Foundry VTT](https://foundryvtt.com/) world con
 
 ## Scope
 
-This tool manages the **journal layer** of a Foundry world: journal entries, their categories, and their pages. It also lists actors, reads raw compendium documents, and can show a read-only view of a Shadowdark character's attack inputs for debugging. It is intentionally narrow — no scene management, no compendium editing, no editing of system-specific mechanics.
+This tool manages the **journal layer** of a Foundry world: journal entries, their categories, and their pages. It also puts **labels on hex-map scenes**, lists actors, reads raw compendium documents, and can show a read-only view of a Shadowdark character's attack inputs for debugging. It is intentionally narrow — no general scene management, no compendium editing, no editing of system-specific mechanics.
 
 The primary use case is AI-assisted world-building: an LLM writes lore entries via the MCP server while a GM reviews them in the Foundry UI in real time.
 
@@ -13,10 +13,12 @@ The primary use case is AI-assisted world-building: an LLM writes lore entries v
 **Requirements:** Python 3.12+, [uv](https://docs.astral.sh/uv/), a running Foundry v14 instance with an active world.
 
 ```
-git clone <repo>
+git clone --recurse-submodules <repo>
 cd foundry-cli
 cp .env.example .env   # fill in credentials
 ```
+
+The Shadowdark system is a git submodule under `third_party/`; the hex-map label styles measure text with its fonts.
 
 `.env` keys:
 
@@ -120,9 +122,38 @@ printf "Thornwall\nThornwall — Docks Quarter\nThornwall — Temple Quarter\n" 
   foundry journal page reorder --journal "Ravens — Lore"
 ```
 
+### Hex maps
+
+Labels on a hex-map scene, placed by the hex number printed on the map (`0816` = column 08, row 16). Labels are ordinary Foundry Drawings: GM-only until revealed, and the GM can drag them or hide/reveal them by hand with the eye toggle.
+
+```
+foundry hexmap init      --scene NAME --size COLSxROWS [--shifted even|odd]
+foundry hexmap calibrate --scene NAME [--label-pos top|center|bottom]
+foundry hexmap numbers   --scene NAME [--remove]
+foundry hexmap label     HEX [TEXT] --scene NAME [--public | --hidden] [--pos POS]
+foundry hexmap unlabel   HEX --scene NAME
+foundry hexmap list      --scene NAME [--json]
+```
+
+**Setup, once per scene:** `init` places two magenta anchor hexagons. Drag each onto the printed hex it names (they snap to the scene grid when the grid is aligned to the map), then run `calibrate`. Check with `numbers`, which puts a number tag in every hex. `foundry hexmap --help` walks through it step by step.
+
+**Look:** labels are Shadowdark blackletter, white on a near-solid black box, big enough to read when zoomed out; numbers are small Montserrat Bold tags. Both use the Shadowdark system's fonts.
+
+### Companion module: Hexmap Labels
+
+Optional. Foundry has no per-user show/hide for Drawings, so `module/` holds a small Foundry module that adds **Hex labels** and **Hex numbers** toggles to the Tokens toolbar. Each user shows or hides them on their own screen; nothing is written to the world. Labels start hidden on every load.
+
+Install it in Foundry with this manifest URL:
+
+```
+https://raw.githubusercontent.com/allardhoeve/foundry-cli/main/module/module.json
+```
+
+**Releasing the module:** bump `version` and `download` (`.../releases/download/module-vX.Y.Z/module.zip`) in `module/module.json` on `main`, then push the tag `module-vX.Y.Z`. The `Release module` workflow checks that the two agree, zips `module/` and publishes the GitHub release.
+
 ## MCP server
 
-The MCP server exposes the same operations as tools so LLMs can manage journal content directly.
+The MCP server exposes every CLI command as a tool, generated from the CLI itself, so the two can't drift apart. `foundry hexmap label` becomes `hexmap_label`, `foundry journal page upsert` becomes `journal_page_upsert`, and so on. Each tool's parameters are the command's arguments and options, its description is the command's help text (including the hex-map workflow), and calling it runs the command.
 
 ```
 uv run python foundry_mcp.py
@@ -135,13 +166,13 @@ Register in an MCP client config:
   "mcpServers": {
     "foundry": {
       "command": "uv",
-      "args": ["run", "python", "/path/to/foundry_mcp.py"]
+      "args": ["run", "--directory", "/path/to/foundry-cli", "python", "foundry_mcp.py"]
     }
   }
 }
 ```
 
-Available tools: `actor_list`, `actor_get`, `compendium_get`, `journal_list`, `journal_upsert`, `journal_delete`, `category_list`, `category_upsert`, `category_delete`, `page_list`, `page_upsert`, `page_reorder`, `page_delete`.
+List commands always return JSON, and delete commands skip their confirmation prompt. `journal_page_reorder` takes the titles as a `titles` parameter, one per line.
 
 ## Testing
 

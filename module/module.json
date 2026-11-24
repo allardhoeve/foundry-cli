@@ -1,0 +1,27 @@
+{
+  "id": "foundry-cli-hexmap",
+  "title": "Hexmap Labels (foundry-cli)",
+  "description": "Per-user toolbar toggles for the hex labels and hex numbers that foundry-cli draws on hex-map scenes. Each user can show or hide them on their own screen; nothing is written to the world.",
+  "version": "0.1.0",
+  "compatibility": {
+    "minimum": "13",
+    "verified": "14"
+  },
+  "authors": [
+    {
+      "name": "allardhoeve",
+      "url": "https://github.com/allardhoeve"
+    }
+  ],
+  "esmodules": ["src/hexmap.js"],
+  "languages": [
+    {
+      "lang": "en",
+      "name": "English",
+      "path": "lang/en.json"
+    }
+  ],
+  "url": "https://github.com/allardhoeve/foundry-cli",
+  "manifest": "https://raw.githubusercontent.com/allardhoeve/foundry-cli/main/module/module.json",
+  "download": "https://github.com/allardhoeve/foundry-cli/releases/download/module-v0.1.0/module.zip"
+}
