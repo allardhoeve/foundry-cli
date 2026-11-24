@@ -10,9 +10,11 @@ Credentials are loaded from .env (or env vars):
 import base64
 import json
 import os
+import random
 import re
 import sys
 import threading
+import time
 from pathlib import Path
 
 import click
@@ -156,6 +158,26 @@ class FoundryClient:
             raise click.ClickException(
                 f"Expected world '{self._world}' but '{active}' is active")
 
+    # Each CLI process opens its own Socket.io connections, so many parallel
+    # calls (e.g. MCP tools fired at once) can make Foundry miss a handshake.
+    # Retry with exponential backoff plus jitter, so the retries spread out.
+    _CONNECT_ATTEMPTS = 5
+    _BACKOFF_BASE = 0.25   # seconds: ~0.25, 0.5, 1, 2 before attempts 2-5
+
+    def _socket_connect(self, sio: socketio.Client) -> None:
+        for attempt in range(self._CONNECT_ATTEMPTS):
+            try:
+                sio.connect(self._url, headers=self._socket_headers(), transports=["websocket"])
+                return
+            except socketio.exceptions.ConnectionError as e:
+                if attempt == self._CONNECT_ATTEMPTS - 1:
+                    raise click.ClickException(
+                        f"Could not open a Socket.io connection to {self._url} after "
+                        f"{self._CONNECT_ATTEMPTS} attempts ({e}). Foundry may be busy; "
+                        "it is safe to retry.") from None
+                delay = self._BACKOFF_BASE * 2 ** attempt
+                time.sleep(delay + random.uniform(0, delay / 2))
+
     def _discover_user_id(self) -> str:
         result: list = [None]
         done = threading.Event()
@@ -168,7 +190,7 @@ class FoundryClient:
                 done.set()
             sio.emit("getJoinData", callback=on_data)
 
-        sio.connect(self._url, headers=self._socket_headers(), transports=["websocket"])
+        self._socket_connect(sio)
         done.wait(timeout=10)
         sio.disconnect()
 
@@ -196,7 +218,7 @@ class FoundryClient:
                                   "userId": user_id,
                                   "password": self._gm_password})
         r.raise_for_status()
-        self._sio.connect(self._url, headers=self._socket_headers(), transports=["websocket"])
+        self._socket_connect(self._sio)
         if not self._ready.wait(timeout=10):
             raise click.ClickException("Socket.io connection timed out")
 
