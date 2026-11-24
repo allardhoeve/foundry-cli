@@ -574,9 +574,15 @@ class FoundryClient:
 
     def _boxed_drawing(self, scene: dict, kind: str, hex_id: str, text: str,
                        x: float, y: float, style: dict, hidden: bool) -> dict:
-        """Text in a filled box, visibly centred on (x, y)."""
+        """Text in a filled box, visibly centred on (x, y).
+
+        interface=True is Foundry's Drawing Role "Information": drawn in the
+        interface group, above the fog of war, so labels and numbers stay
+        readable in unexplored areas. `hidden` still keeps GM-only labels
+        from players."""
         return (self._drawing_base(scene, kind, hex_id)
-                | hexstyle.boxed_text(text, x, y, style) | {"hidden": hidden})
+                | hexstyle.boxed_text(text, x, y, style)
+                | {"hidden": hidden, "interface": True})
 
     def _scene_update_cfg(self, scene: dict, cfg: dict) -> None:
         self._emit({
@@ -706,7 +712,8 @@ class FoundryClient:
 
         if existing:
             d = existing[0]
-            update: dict = {"_id": d["_id"]}
+            # interface: labels made before it was the default get moved above the fog.
+            update: dict = {"_id": d["_id"], "interface": True}
             if public is not None:
                 update["hidden"] = not public
             if text is not None or pos is not None:
@@ -1162,11 +1169,17 @@ _HEXMAP_HELP = """\
   label or changes its visibility unless you ask it to. Changing a
   label's text resizes its box around where the label is now.
 
+  Labels and numbers use Drawing Role "Information", so they show
+  through fog of war. Labels made by older versions are switched over
+  the next time hexmap label updates them; re-running it with the
+  label's current text is enough. Re-run numbers to replace old tags.
+
   Optional companion module "Foundry CLI Companion", in module/ of
   this repository: adds "Name labels" and "Hex labels" (the numbers)
   toggles to the Tokens toolbar, so each user can show or hide them on
-  their own screen. Keys: L for name labels, H for hex labels. Name
-  labels start switched off. Without the module, labels always show.
+  their own screen. Keys: L for name labels, H for hex labels. Each
+  user's choice is remembered in their browser; name labels start
+  switched off. Without the module, labels always show.
 """
 
 

@@ -10,15 +10,17 @@
  * "label", "number" or "anchor". Only labels and numbers get a toggle. This
  * contract is shared with hexstyle.py / foundry.py in the same repository.
  *
- * State is per page load: labels start hidden, numbers start shown.
+ * Each user's choice is kept in a client setting (this browser's
+ * localStorage), so it survives a reload. Defaults: labels hidden, numbers
+ * shown.
  *
  * Keyboard: L toggles the name labels, H the hex labels (numbers). Both are
  * rebindable under Configure Controls; neither is used by Foundry core or
  * the Shadowdark system.
  *
- * Why a refreshDrawing hook: a Drawing's visible shape lives in the primary
- * canvas group and Foundry resets its visibility on every redraw (document
- * updates, scene changes). Re-applying the toggle after each refresh is what
+ * Why a refreshDrawing hook: Foundry resets a Drawing's visibility on every
+ * redraw (document updates, scene changes), whichever canvas group its shape
+ * lives in. Re-applying the toggle after each refresh is what
  * keeps a hidden label hidden.
  */
 
@@ -29,7 +31,10 @@ const TOGGLES = {
     number: {title: "HEXMAP.ToggleNumbers", icon: "fa-solid fa-hashtag", keys: ["KeyH"]},
 };
 
-const shown = {label: false, number: true};
+const DEFAULT_SHOWN = {label: false, number: true};
+const shown = {...DEFAULT_SHOWN};
+
+const settingKey = kind => `shown-${kind}`;
 
 const kindOf = drawing => drawing.document.flags.world?.hexmap?.kind;
 
@@ -49,11 +54,19 @@ function refreshKind(kind) {
 
 function setShown(kind, active) {
     shown[kind] = active;
+    game.settings.set(MODULE_ID, settingKey(kind), active);
     refreshKind(kind);
 }
 
 Hooks.once("init", () => {
     for (const [kind, {title, keys}] of Object.entries(TOGGLES)) {
+        game.settings.register(MODULE_ID, settingKey(kind), {
+            scope: "client",
+            config: false,
+            type: Boolean,
+            default: DEFAULT_SHOWN[kind],
+        });
+        shown[kind] = game.settings.get(MODULE_ID, settingKey(kind));
         game.keybindings.register(MODULE_ID, `toggle-${kind}`, {
             name: title,
             editable: keys.map(key => ({key})),

@@ -95,6 +95,7 @@ def test_label_lifecycle(client, scene):
     _setup(client, scene)
     d = client.hexmap_label(scene, "507", "Wormden Keep", None, None)
     assert d["_created"] and d["hidden"] is True and d["_hex"] == "0507"
+    assert d["interface"] is True   # Drawing Role "Information": above the fog
 
     # Box visibly centred on the label point of 0507, in the label style.
     x, y = hg.label_point(TRUE, 5, 7, "bottom")
@@ -128,6 +129,16 @@ def test_label_keeps_manual_position(client, scene):
     assert hexstyle.box_centre(moved) == pytest.approx(dragged, abs=1)
 
 
+def test_label_update_moves_old_label_above_fog(client, scene):
+    _setup(client, scene)
+    d = client.hexmap_label(scene, "0507", "Wormden Keep", None, None)
+    s = client._find_scene(scene)
+    client._scene_emit(s, "update", {"updates": [{"_id": d["_id"], "interface": False}]})
+    client.hexmap_label(scene, "0507", "Wormden Keep", None, None)
+    [l] = client._hexmap_drawings(client._find_scene(scene), "label")
+    assert l["interface"] is True
+
+
 def test_label_off_map(client, scene):
     _setup(client, scene)
     with pytest.raises(click.ClickException, match="off the map"):
@@ -143,6 +154,7 @@ def test_numbers_and_remove_leave_labels_alone(client, scene):
     numbers = client._hexmap_drawings(s, "number")
     assert len(numbers) == 170
     assert not any(n["hidden"] for n in numbers)   # numbers aren't secret
+    assert all(n["interface"] for n in numbers)    # above the fog
     client.hexmap_numbers(scene, remove=True)
     s = client._find_scene(scene)
     assert client._hexmap_drawings(s, "number") == []
