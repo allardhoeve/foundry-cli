@@ -1178,8 +1178,8 @@ _HEXMAP_HELP = """\
   this repository: adds "Name labels" and "Hex labels" (the numbers)
   toggles to the Tokens toolbar, so each user can show or hide them on
   their own screen. Keys: L for name labels, H for hex labels. Each
-  user's choice is remembered in their browser; name labels start
-  switched off. Without the module, labels always show.
+  user's choice is remembered in their browser; both start switched
+  off. Without the module, labels always show.
 """
 
 

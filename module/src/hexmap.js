@@ -11,8 +11,7 @@
  * contract is shared with hexstyle.py / foundry.py in the same repository.
  *
  * Each user's choice is kept in a client setting (this browser's
- * localStorage), so it survives a reload. Defaults: labels hidden, numbers
- * shown.
+ * localStorage), so it survives a reload. Both start hidden.
  *
  * Keyboard: L toggles the name labels, H the hex labels (numbers). Both are
  * rebindable under Configure Controls; neither is used by Foundry core or
@@ -31,7 +30,7 @@ const TOGGLES = {
     number: {title: "HEXMAP.ToggleNumbers", icon: "fa-solid fa-hashtag", keys: ["KeyH"]},
 };
 
-const DEFAULT_SHOWN = {label: false, number: true};
+const DEFAULT_SHOWN = {label: false, number: false};
 const shown = {...DEFAULT_SHOWN};
 
 const settingKey = kind => `shown-${kind}`;
