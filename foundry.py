@@ -1163,10 +1163,10 @@ _HEXMAP_HELP = """\
   label's text resizes its box around where the label is now.
 
   Optional companion module "Foundry CLI Companion", in module/ of
-  this repository: adds "Hex labels" and "Hex numbers" toggles to the
-  Tokens toolbar, so each user can show or hide them on their own screen.
-  Keys: L or H toggles labels, N toggles numbers. Labels start switched off.
-  Without the module, labels are always shown.
+  this repository: adds "Name labels" and "Hex labels" (the numbers)
+  toggles to the Tokens toolbar, so each user can show or hide them on
+  their own screen. Keys: L for name labels, H for hex labels. Name
+  labels start switched off. Without the module, labels always show.
 """
 
 

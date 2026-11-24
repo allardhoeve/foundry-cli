@@ -12,9 +12,9 @@
  *
  * State is per page load: labels start hidden, numbers start shown.
  *
- * Keyboard: L or H toggles labels, N toggles numbers (rebindable under
- * Configure Controls). None of these keys is used by Foundry core or the
- * Shadowdark system.
+ * Keyboard: L toggles the name labels, H the hex labels (numbers). Both are
+ * rebindable under Configure Controls; neither is used by Foundry core or
+ * the Shadowdark system.
  *
  * Why a refreshDrawing hook: a Drawing's visible shape lives in the primary
  * canvas group and Foundry resets its visibility on every redraw (document
@@ -25,8 +25,8 @@
 const MODULE_ID = "foundry-cli-companion";
 
 const TOGGLES = {
-    label: {title: "HEXMAP.ToggleLabels", icon: "fa-solid fa-tag", keys: ["KeyL", "KeyH"]},
-    number: {title: "HEXMAP.ToggleNumbers", icon: "fa-solid fa-hashtag", keys: ["KeyN"]},
+    label: {title: "HEXMAP.ToggleLabels", icon: "fa-solid fa-tag", keys: ["KeyL"]},
+    number: {title: "HEXMAP.ToggleNumbers", icon: "fa-solid fa-hashtag", keys: ["KeyH"]},
 };
 
 const shown = {label: false, number: true};

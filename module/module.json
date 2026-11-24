@@ -2,7 +2,7 @@
   "id": "foundry-cli-companion",
   "title": "Foundry CLI Companion",
   "description": "Companion module for foundry-cli. Adds per-user toolbar toggles for the hex labels and hex numbers that foundry-cli draws on hex-map scenes; each user shows or hides them on their own screen, and nothing is written to the world.",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "compatibility": {
     "minimum": "13",
     "verified": "14"
@@ -25,5 +25,5 @@
   ],
   "url": "https://github.com/allardhoeve/foundry-cli",
   "manifest": "https://raw.githubusercontent.com/allardhoeve/foundry-cli/main/module/module.json",
-  "download": "https://github.com/allardhoeve/foundry-cli/releases/download/module-v0.2.2/module.zip"
+  "download": "https://github.com/allardhoeve/foundry-cli/releases/download/module-v0.2.3/module.zip"
 }
