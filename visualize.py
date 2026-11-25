@@ -7,9 +7,11 @@ vN.json (the request and notes), vN-a.png, vN-b.png, ... and vN-sheet.png.
 """
 
 import json
+import os
 import random
 import re
 import shutil
+import sys
 import time
 import tomllib
 from pathlib import Path
@@ -41,6 +43,11 @@ class MfluxEngine:
 
     def _model(self, with_refs: bool):
         if with_refs not in self._models:
+            if not sys.stdout.isatty():
+                # tqdm redraws its bar with \r, which outside a terminal (Claude's task
+                # view, a log) becomes a run-on line; run_generation reports per variant.
+                # tqdm reads this when mflux imports it, just below.
+                os.environ.setdefault("TQDM_DISABLE", "1")
             from mflux.models.common.config import ModelConfig
             from mflux.models.flux2.variants import Flux2Klein, Flux2KleinEdit
 
@@ -128,13 +135,19 @@ def run_generation(ctx, kind: str, name: str, prompt: str, refs: list[Path], var
     (folder / f"v{v}.json").write_text(json.dumps(record, indent=2, ensure_ascii=False) + "\n")
 
     engine = ctx.obj.get("engine") or MfluxEngine()
+    refs_note = f", {len(refs)} reference{'s' if len(refs) != 1 else ''}" if refs else ""
+    click.echo(f"v{v}: {variants} variants of {name}{refs_note}")
     images = {}
-    for letter, s in seeds.items():
-        started = time.time()
+    started = time.time()
+    for i, (letter, s) in enumerate(seeds.items(), 1):
+        t = time.time()
         im = engine.generate(prompt, refs, s, k["width"], k["height"])
         im.save(folder / f"v{v}-{letter}.png")
         images[letter] = im
-        click.echo(f"v{v}-{letter} {time.time() - started:.0f}s", err=True)
+        line = f"v{v}-{letter} done ({i}/{variants}, {time.time() - t:.0f}s)"
+        if i < variants:
+            line += f", about {(time.time() - started) / i * (variants - i):.0f}s left"
+        click.echo(line)
     contact_sheet(images).save(folder / f"v{v}-sheet.png")
     click.echo(folder / f"v{v}-sheet.png")
 

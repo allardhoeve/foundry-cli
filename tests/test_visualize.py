@@ -64,6 +64,14 @@ def test_new_writes_variants_sheet_and_record(run):
     assert run.engine.calls[0]["size"] == (512, 512)
 
 
+def test_new_reports_one_line_per_variant(run):
+    out = run("new", "item", "Verdigris Armor", "--subject", "x", "--variants", "2").output.splitlines()
+    assert out[0].startswith("v1: 2 variants of Verdigris Armor")
+    assert out[1].startswith("v1-a done (1/2,") and "left" in out[1]
+    assert out[2].startswith("v1-b done (2/2,") and "left" not in out[2]
+    assert out[3].endswith("v1-sheet.png")
+
+
 def test_new_uses_kind_size(run):
     run("new", "location", "Wormden Keep", "--subject", "a tower", "--variants", "1")
     assert run.engine.calls[0]["size"] == (1024, 640)
