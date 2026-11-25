@@ -1,0 +1,21 @@
+description = "Inventory icon in the style of Foundry's built-in item icons: one object, angled, filling the frame, painted."
+width = 512
+height = 512
+template = """hand-painted fantasy game item icon of {subject}, a single object only, \
+viewed from slightly above at a three-quarter angle, the object fills most of the frame, \
+muted colors, thick visible brush strokes, simple shapes, strong highlights and deep shadows, \
+a faint soft glow behind it, plain dark background, flat 2D digital painting"""
+
+# Foundry core icons (paths under Foundry's public data) that `moodbook init` copies in.
+moodbook = [
+    "icons/equipment/chest/breastplate-layered-steel.webp",
+    "icons/weapons/swords/sword-gold-holy.webp",
+]
+
+[final]
+size = 256      # Foundry's own icons are 256x256
+boost = true    # brighten the muted generation to match Foundry's icons in the inventory list
+
+[example]
+text = "Verdigris Armor. Plate mail of polished grey-green metal that has never known the passage of time. +1 AC, cannot rust."
+subject = "a plate mail torso built from wide angular plates overlapping in diagonal bands, an open arm hole on the side, polished sage-green metal shining like new, undamaged"

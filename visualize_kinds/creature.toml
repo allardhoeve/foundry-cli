@@ -1,0 +1,17 @@
+description = "A monster or animal: full body, three-quarter view, painted. Untested template."
+width = 768
+height = 768
+template = """hand-painted fantasy creature illustration of {subject}, the whole body visible, \
+three-quarter view, the creature fills most of the frame, muted colors, \
+thick visible brush strokes, strong highlights and deep shadows, plain dark background, \
+2D digital painting"""
+
+moodbook = []
+
+[final]
+size = 0
+boost = false
+
+[example]
+text = "Marsh Gulper. A frog the size of a cow with a second mouth in its belly. Swallows whole."
+subject = "a giant bloated frog as large as a cow, mottled brown and green skin, a second gaping toothed mouth in its pale belly"

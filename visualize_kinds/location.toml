@@ -1,0 +1,16 @@
+description = "A place (settlement, building, landscape): wide establishing view, painted. Untested template."
+width = 1024
+height = 640
+template = """hand-painted fantasy landscape illustration of {subject}, wide establishing view, \
+seen from a short distance, muted colors, atmospheric light, visible brush strokes, \
+2D digital painting"""
+
+moodbook = []
+
+[final]
+size = 0
+boost = false
+
+[example]
+text = "Wormden Keep. A squat stone tower on a marsh island, half its roof fallen in, connected to the shore by a rotting causeway."
+subject = "a squat ruined stone tower on a small island in a misty marsh, half of its roof collapsed, a long rotting wooden causeway leading to it from the shore"

@@ -10,6 +10,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "mcp>=1.0",
     "pillow>=13.0.0",
+    "mflux==0.24.0 ; platform_machine == 'arm64' and sys_platform == 'darwin'",
 ]
 
 [dependency-groups]

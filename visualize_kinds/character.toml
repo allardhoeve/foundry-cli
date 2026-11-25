@@ -1,0 +1,16 @@
+description = "Portrait of a person (NPC or player character): head and shoulders, painted. Untested template."
+width = 768
+height = 1024
+template = """hand-painted fantasy character portrait of {subject}, head and shoulders, \
+three-quarter view, looking toward the viewer, muted colors, visible brush strokes, \
+soft directional light, plain dark background, 2D digital painting"""
+
+moodbook = []
+
+[final]
+size = 0        # keep the generated size
+boost = false
+
+[example]
+text = "Mother Hessa, priestess of the drowned god. Old, stern, smells of brine. Wears a net as a shawl."
+subject = "a stern old woman priestess with deep wrinkles and grey hair tied back, a fishing net draped over her shoulders as a shawl, a small coral pendant"

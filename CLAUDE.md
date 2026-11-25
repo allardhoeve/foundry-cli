@@ -66,6 +66,10 @@ All upsert operations are idempotent — safe to re-run. Entities are matched by
 
 Text boxes are sized by measuring with the Shadowdark submodule's font files (`hexstyle.py`, Pillow). There is one style on purpose (bold, readable zoomed out); don't add presets without asking.
 
+## Images: `visualize.py`
+
+`uv run python visualize.py` paints items, characters, locations and creatures locally with FLUX.2 klein 4B (distilled, 8-bit) through mflux; the `visualize` skill drives it. It is a separate CLI from `foundry.py` and has no MCP tools. Kinds live in `visualize_kinds/<kind>.toml` (template, size, suggested moodbook). Moodbooks (`moodbooks/`) and results (`output/`) stay out of git: the repo is public and Foundry's icons are licensed art. FLUX.2 has no negative prompt in mflux, so templates are worded positively.
+
 ## Error handling
 
 - Wrong or inactive world → explicit message naming the active world vs expected
